@@ -16,13 +16,16 @@ class Connection:
                  host=None,
                  port=None,
                  username=None,
-                 password=None):
+                 password=None,
+                 ssl=True,
+                 ssl_required=True):
         self.database = database
         self.unix_socket_path = unix_socket_path
         self.host = host
         self.port = port
         self.username = username
         self.password = password
+        self.ssl = ssl
 
         self._stream = None
         self._nursery = None
@@ -135,33 +138,63 @@ class Connection:
         if self.password is None:
             self.password = ''
 
-        if self.unix_socket_path:
-            self._stream = await trio.open_unix_socket(
-                self.unix_socket_path)
-        elif self.host:
-            if not self.port:
-                self.port = 5432
-            self._stream = await trio.open_tcp_stream(self.host, self.port)
-        else:
-            try:
-                self.unix_socket_path = DEFAULT_PG_UNIX_SOCKET
+        try:
+            if self.unix_socket_path:
                 self._stream = await trio.open_unix_socket(
                     self.unix_socket_path)
-            except (OSError, RuntimeError):
-                self.host = 'localhost'
+            elif self.host:
                 if not self.port:
                     self.port = 5432
-                self._stream = await trio.open_tcp_stream(
-                    self.host, self.port)
+                self._stream = await trio.open_tcp_stream(self.host, self.port)
+
+                if self.ssl:
+                    await self._setup_ssl()
+            else:
+                try:
+                    self.unix_socket_path = DEFAULT_PG_UNIX_SOCKET
+                    self._stream = await trio.open_unix_socket(
+                        self.unix_socket_path)
+                except (OSError, RuntimeError):
+                    self.host = 'localhost'
+                    if not self.port:
+                        self.port = 5432
+                    self._stream = await trio.open_tcp_stream(
+                        self.host, self.port)
+        except (trio.socket.gaierror, OSError) as e:
+            raise OperationalError(str(e))
+
+    async def _setup_ssl(self):
+        await self._stream.send_all(bytes(_pgmsg.SSLRequest()))
+        resp = await self._stream.receive_some(1)
+        if resp == b'':
+            raise OperationalError('Database connection broken')
+        if resp == b'N':
+            if self.ssl_required:
+                raise OperationalError(
+                    'Database server refused SSL request')
+            return
+        if resp != b'S':
+            raise InternalError(
+                'Received unexpected response to SSL request')
+        import ssl
+        self._stream = trio.SSLStream(
+            self._stream,
+            ssl.create_default_context()
+        )
+        print('setup ssl', self._stream)
+
+
 
 
 @asynccontextmanager
 async def connect(database, *,
-            unix_socket_path=None,
-            host=None,
-            port=None,
-            username=None,
-            password=None):
+                  unix_socket_path=None,
+                  host=None,
+                  port=None,
+                  username=None,
+                  password=None,
+                  ssl=True,
+                  ssl_required=True):
     conn = Connection(
         database,
         unix_socket_path=unix_socket_path,
@@ -169,6 +202,8 @@ async def connect(database, *,
         port=port,
         username=username,
         password=password,
+        ssl=ssl,
+        ssl_required=ssl_required,
     )
     async with trio.open_nursery() as nursery:
         nursery.start_soon(conn._run)

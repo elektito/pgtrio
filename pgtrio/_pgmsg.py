@@ -534,6 +534,11 @@ class ReadyForQuery(PgMessage):
         return f'<ReadyForQuery status="{status}">'
 
 
+class SSLRequest(PgMessage):
+    _type = None # SSLRequest message has no type field
+    ssl_request_code = Int32(80877103)
+
+
 class StartupMessage(PgMessage):
     _type = None # startup message has no type field
     version = Int32(0x0003_0000) # protocol version 3.0
