@@ -24,7 +24,7 @@ class Int32(PgDataType):
     @classmethod
     def deserialize(cls, msg, start):
         value = msg[start:start+4]
-        value = int.from_bytes(value, byteorder='big', signed=False)
+        value = int.from_bytes(value, byteorder='big', signed=True)
         return cls(value), 4
 
 
@@ -153,7 +153,7 @@ class PgMessage(metaclass=PgMessageMetaClass):
         # add four to length due to the length of the "length" field
         # itself
         length = 4 + len(payload)
-        length = length.to_bytes(length=4, byteorder='big')
+        length = length.to_bytes(length=4, byteorder='big', signed=True)
 
         msg = self._type if self._type is not None else b''
         msg += length + payload
