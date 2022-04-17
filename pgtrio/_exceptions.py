@@ -3,7 +3,8 @@ class Warning(Exception):
 
 
 class Error(Exception):
-    pass
+    def __init__(self, error_msg):
+        self.error_msg = error_msg
 
 
 class InterfaceError(Error):

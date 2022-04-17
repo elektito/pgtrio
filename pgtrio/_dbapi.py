@@ -2,7 +2,7 @@ import logging
 import trio
 from contextlib import asynccontextmanager
 from . import _pgmsg
-from ._exceptions import InternalError, DatabaseError
+from ._exceptions import InternalError, DatabaseError, OperationalError
 
 DEFAULT_PG_UNIX_SOCKET = '/var/run/postgresql/.s.PGSQL.5432'
 BUFFER_SIZE = 2048
@@ -43,7 +43,10 @@ class Connection:
 
         buf = b''
         while True:
-            buf += await self._stream.receive_some(BUFFER_SIZE)
+            received_data = await self._stream.receive_some(BUFFER_SIZE)
+            if received_data == b'':
+                raise OperationalError('Database connection broken')
+            buf += received_data
 
             start = 0
             while True:
