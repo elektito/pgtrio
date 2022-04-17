@@ -30,6 +30,7 @@ class Connection:
         self._stream = None
         self._nursery = None
         self._server_vars = {}
+        self._notices = []
 
         self._auth_ok = trio.Event()
         self._ready_for_query = trio.Event()
@@ -37,6 +38,10 @@ class Connection:
     @property
     def server_vars(self):
         return self._server_vars
+
+    @property
+    def notices(self):
+        return self._notices
 
     async def _run(self):
         await self._connect()
@@ -60,6 +65,9 @@ class Connection:
 
                 if isinstance(msg, _pgmsg.ErrorResponse):
                     await self._handle_error(msg)
+                    continue
+                if isinstance(msg, _pgmsg.NoticeResponse):
+                    await self._handle_notice(msg)
                     continue
 
                 if not self._auth_ok.is_set():
@@ -115,6 +123,21 @@ class Connection:
             error_msg=error_msg,
             severity=severity,
         )
+
+    async def _handle_notice(self, msg):
+        fields = dict(msg.pairs)
+
+        notice_msg = fields.get('M')
+        if error_msg is not None:
+            error_msg = str(error_msg)
+
+        severity = fields.get('S')
+        if severity is not None:
+            severity = str(severity)
+
+        self.notices.append((severity, notice_msg))
+        logger.info(
+            'Received notice from backend: [{severity}] {notice_msg}')
 
     async def _handle_msg_parameter_status(self, msg):
         self._server_vars[msg.param_name] = msg.param_value

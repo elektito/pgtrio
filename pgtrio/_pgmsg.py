@@ -460,6 +460,38 @@ class NegotiateProtocolVersion(PgMessage):
     option_name = String
 
 
+class NoticeResponse(PgMessage):
+    _type = b'N'
+    # the message body contains one or more of (Byte1, String) pairs
+    # each denoting a code and a value. The custom _deserializer
+    # gathers these in a field named "notices".
+
+    def __init__(self, notices=[]):
+        self.notices = []
+
+    def __repr__(self):
+        nfields = f'({len(self.notices)} field(s))'
+        notices = ' '.join(
+            f'{code}={value}' for code, value in self.notices)
+        return f'<NoticeMessage {nfields} {notices}>'
+
+    @classmethod
+    def _deserialize(cls, msg, start, length):
+        idx = start
+        while True:
+            if idx >= len(msg):
+                raise ValueError(
+                    'Unterminated NoticeMessage message (should end '
+                    'with a zero byte)')
+            code, n = Byte1.deserialize(msg, start)
+            if code.value == b'\0':
+                break
+            idx += n
+            value, n = String.deserialize(msg, start)
+            obj.notices.append((code, value))
+            idx += n
+
+
 class ParameterStatus(PgMessage):
     _type = b'S'
     param_name = String
