@@ -31,6 +31,10 @@ class Connection:
         self._auth_ok = trio.Event()
         self._ready_for_query = trio.Event()
 
+    @property
+    def server_vars(self):
+        return self._server_vars
+
     async def _run(self):
         await self._connect()
 
