@@ -9,6 +9,25 @@ class PgDataType:
     pass
 
 
+class Int16(PgDataType):
+    def __init__(self, value: int):
+        self.value = value
+
+    def __bytes__(self):
+        return self.value.to_bytes(length=2,
+                                   byteorder='big',
+                                   signed=True)
+
+    def __repr__(self):
+        return str(self.value)
+
+    @classmethod
+    def deserialize(cls, msg, start):
+        value = msg[start:start+2]
+        value = int.from_bytes(value, byteorder='big', signed=True)
+        return cls(value), 2
+
+
 class Int32(PgDataType):
     def __init__(self, value: int):
         self.value = value
@@ -418,6 +437,107 @@ class BackendKeyData(PgMessage):
             f'secret_key={self.secret_key}>'
         )
 
+class CommandComplete(PgMessage):
+    _type = b'C'
+    cmd_tag = String
+
+    def __repr__(self):
+        try:
+            tag = self.cmd_tag.value.decode('utf-8')
+        except:
+            tag = repr(self.cmd_tag.value)[2:-1]
+        return f'<CommandComplete tag="{tag}">'
+
+
+class Close(PgMessage):
+    # the Close message (which is a front-end message) has the same
+    # _type as the back-end CommandComplete message. we do not set the
+    # _type field here so that the CommandComplete class is registered
+    # for deserializing. The overridden __bytes__ method will set the
+    # type properly for serialization.
+    _type = None
+    type = Byte1
+    name = String
+
+    def __bytes__(self):
+        type_bytes = bytes(self.type)
+        name_bytes = bytes(self.name)
+        length = 1 + 4 + len(type_bytes) + len(name_bytes)
+        return b'C' + length + type_bytes + name_bytes
+
+    def __repr__(self):
+        type = self.type.value.decode('ascii')
+        try:
+            name = self.name.value.decode('ascii')
+        except:
+            name = repr(self.name.value)[2:-1]
+        return f'<Close type={type} name={name}>'
+
+
+class DataRow(PgMessage):
+    _type = b'D'
+    column_count = Int16
+
+    # for each column there will be an Int32, telling us the length of
+    # the column value, and a ByteN containing the value.
+
+    def __init__(self, columns=None):
+        self.columns = columns
+        if self.columns is None:
+            self.columns = []
+
+    def __repr__(self):
+        columns = ''.join(repr(c) for c in self.columns)
+        return f'<DataRow {columns}>'
+
+    @classmethod
+    def _deserialize(cls, msg, start, length):
+        obj = cls()
+
+        idx = start
+        obj.column_count, n = Int16.deserialize(msg, idx)
+        idx += n
+
+        for i in range(obj.column_count.value):
+            column_size, n = Int32.deserialize(msg, idx)
+            idx += n
+
+            if column_size.value < 0:
+                # this is a NULL value
+                column_value = None
+            else:
+                column_value = msg[idx:idx+column_size.value]
+                idx += column_size.value
+
+            obj.columns.append(column_value)
+
+        return obj
+
+
+class Describe(PgMessage):
+    # The Describe message (which is a front-end message) has the same
+    # _type as the DataRow message (which is a back-end message). we
+    # don't set the _type field here so that the DataRow message is
+    # allowed to be registered for deserialization. The overridden
+    # __bytes__ method will properly handle serialization.
+    _type = None
+    type = Byte1
+    name = String
+
+    def __bytes__(self):
+        type_bytes = bytes(self.type)
+        name_bytes = bytes(self.name)
+        length = 1 + 4 + len(type_bytes) + len(name_bytes)
+        return b'D' + length + type_bytes + name_bytes
+
+    def __repr__(self):
+        type = self.type.value.decode('ascii')
+        try:
+            name = self.name.value.decode('ascii')
+        except:
+            name = repr(self.name.value)[2:-1]
+        return f'<Describe type={type} name={name}>'
+
 
 class ErrorResponse(PgMessage):
     _type = b'E'
@@ -544,15 +664,30 @@ class PasswordMessage(PgMessage):
         return f'<PasswordMessage password="{password}">'
 
 
+class Query(PgMessage):
+    _type = b'Q'
+    query = String
+
+    def __init__(self, query):
+        if isinstance(query, str):
+            query = query.encode('utf-8')
+        if not isinstance(query, bytes):
+            raise ValueError(
+                'query should either by a str or bytes; got '
+                f'{type(query)}')
+
+        self.query = query
+
+
 class ReadyForQuery(PgMessage):
     _type = b'Z'
-    transaction_status = Byte1
+    status = Byte1
 
     def __repr__(self):
         try:
-            status = self.transaction_status.value.decode('utf-8')
+            status = self.status.value.decode('utf-8')
         except UnicodeDecodeError:
-            status = str(self.transaction_status.value)
+            status = str(self.status.value)
 
         if status == 'I':
             status_desc = 'idle'
@@ -564,6 +699,46 @@ class ReadyForQuery(PgMessage):
             status_desc = 'unknown'
         status = f'{status} ({status_desc})'
         return f'<ReadyForQuery status="{status}">'
+
+
+class RowDescription(PgMessage):
+    _type = b'T'
+    nfields = Int16
+    # after this, for each row field a number of fields follow, parsed
+    # in the custom _deserialize method
+
+    def __init__(self, fields=[]):
+        self.fields = []
+
+    def __repr(self):
+        return repr(self.fields)
+
+    @classmethod
+    def _deserialize(cls, msg, start, length):
+        obj = cls()
+        idx = start
+        obj.nfields, n = Int16.deserialize(msg, idx)
+        obj.nfields = obj.nfields.value
+        idx += n
+        while len(obj.fields) < obj.nfields:
+            name, n = String.deserialize(msg, idx)
+            idx += n
+            table_oid, n = Int32.deserialize(msg, idx)
+            idx += n
+            column_attr_id, n = Int16.deserialize(msg, idx)
+            idx += n
+            type_oid, n = Int32.deserialize(msg, idx)
+            idx += n
+            type_len, n = Int16.deserialize(msg, idx)
+            idx += n
+            type_modifier, n = Int32.deserialize(msg, idx)
+            idx += n
+            format_code, n = Int16.deserialize(msg, idx)
+            idx += n
+            obj.fields.append((name, table_oid, column_attr_id,
+                               type_oid, type_len, type_modifier,
+                               format_code))
+        return obj
 
 
 class SSLRequest(PgMessage):
@@ -586,5 +761,7 @@ class StartupMessage(PgMessage):
             self.user + b'\0' +
             b'database\0' +
             self.database + b'\0' +
+            b'datestyle\0iso\0' +
+            b'intervalstyle\0postgres\0' +
             b'\0'
         )
