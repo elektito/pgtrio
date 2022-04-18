@@ -81,24 +81,19 @@ class Connection:
         return self._notices
 
     async def execute(self, query):
-        print('pre-exec')
-        while not self._is_ready:
-            async with self._is_ready_cv:
-                await self._is_ready_cv.wait()
-
-        self._is_ready = False
-
-        print('exec', query)
-        self._query_results = []
-        self._query_row_count = None
-        self._have_query_results = trio.Event()
-
-        msg = _pgmsg.Query(query)
         async with self._query_send_all_lock:
+            self._is_ready = False
+
+            self._query_results = []
+            self._query_row_count = None
+            self._have_query_results = trio.Event()
+
+            msg = _pgmsg.Query(query)
             await self._stream.send_all(bytes(msg))
 
-        await self._have_query_results.wait()
-        return self._query_results
+            await self._have_query_results.wait()
+
+            return self._query_results
 
     async def _run(self):
         await self._connect()
