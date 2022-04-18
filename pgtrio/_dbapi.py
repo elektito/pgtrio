@@ -6,7 +6,7 @@ from . import _pgmsg, _parse_row
 from ._exceptions import InternalError, DatabaseError, OperationalError
 
 DEFAULT_PG_UNIX_SOCKET = '/var/run/postgresql/.s.PGSQL.5432'
-BUFFER_SIZE = 2048
+BUFFER_SIZE = 204800
 
 logger = logging.getLogger(__name__)
 
