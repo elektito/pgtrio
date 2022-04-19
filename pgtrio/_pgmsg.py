@@ -539,6 +539,13 @@ class Describe(PgMessage):
         return f'<Describe type={type} name={name}>'
 
 
+class EmptyQueryResponse(PgMessage):
+    _type = b'I'
+
+    def __repr__(self):
+        return '<EmptyQueryResponse>'
+
+
 class ErrorResponse(PgMessage):
     _type = b'E'
     # fields consist of one or more of (Byte1, String) pairs
@@ -754,6 +761,11 @@ class StartupMessage(PgMessage):
     def __init__(self, user, database):
         self.user = user.encode('utf-8')
         self.database = database.encode('utf-8')
+
+    def __repr__(self):
+        user = self.user.decode('utf-8')
+        database = self.database.decode('utf-8')
+        return f'<StartupMessage user={user} db={database}>'
 
     def params(self):
         return (

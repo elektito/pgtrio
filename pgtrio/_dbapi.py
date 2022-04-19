@@ -24,6 +24,12 @@ class QueryStatus(Enum):
                         # transaction
 
 
+class Query:
+    def __init__(self, text, params):
+        self.text = text
+        self.params = params
+
+
 class Connection:
     def __init__(self, database, *,
                  unix_socket_path=None,
@@ -53,9 +59,25 @@ class Connection:
         self._is_ready = False
         self._is_ready_cv = trio.Condition()
 
-        # we use this lock to make sure no two tasks perform send_all
-        # at the same time.
-        self._query_send_all_lock = trio.Lock()
+        # these channels are used to communicate data to be sent to
+        # the back-end to the _run_send task
+        self._outgoing_send_chan, self._outgoing_recv_chan = \
+            trio.open_memory_channel(0)
+
+        # these channels are used to send queries from the execute
+        # method to the query processor
+        self._query_send_chan, self._query_recv_chan = \
+            trio.open_memory_channel(0)
+
+        # these channels are used to send query results from the query
+        # processor back to the execute method
+        self._results_send_chan, self._results_recv_chan = \
+            trio.open_memory_channel(0)
+
+        # these will be set by process_query method to a pair of
+        # send/receive channels and used to get messages from the
+        # _run_recv task
+        self._cur_msg_send_chan, self._cur_msg_recv_chan = None, None
 
         # this will be initialized to a new trio.Event when performing
         # a query, and the event is set when the results for that
@@ -65,12 +87,8 @@ class Connection:
         # this is set when we receive AuthenticationOk from postgres
         self._auth_ok = trio.Event()
 
-        # this condition is notified when the "ready for query" status
-        # of the connection changes (i.e. when we receive a
-        # ReadyForQuery message from postgres backend, which signifies
-        # one of these states: I (idle), T (in transaction), and E
-        # (error)).
-        #self._query_status_cv = trio.Condition()
+        # this is set by the close() method
+        self._closed = trio.Event()
 
     @property
     def server_vars(self):
@@ -80,33 +98,43 @@ class Connection:
     def notices(self):
         return self._notices
 
-    async def execute(self, query):
-        async with self._query_send_all_lock:
-            self._is_ready = False
+    async def execute(self, query, params={}):
+        q = Query(query, params)
+        self._have_query_results = trio.Event()
+        await self._query_send_chan.send(q)
+        results = await self._results_recv_chan.receive()
+        if isinstance(results, Exception):
+            raise results
+        return results
 
-            self._query_results = []
-            self._query_row_count = None
-            self._have_query_results = trio.Event()
-
-            msg = _pgmsg.Query(query)
-            await self._stream.send_all(bytes(msg))
-
-            await self._have_query_results.wait()
-
-            return self._query_results
+    def close(self):
+        self._closed.set()
 
     async def _run(self):
         await self._connect()
 
-        msg = _pgmsg.StartupMessage(self.username, self.database)
-        await self._stream.send_all(bytes(msg))
+        async with trio.open_nursery() as nursery, self._stream:
+            nursery.start_soon(self._run_recv)
+            nursery.start_soon(self._run_send)
+            nursery.start_soon(self._run_query_processor)
 
+            msg = _pgmsg.StartupMessage(self.username, self.database)
+            await self._send_msg(msg)
+
+            await self._closed.wait()
+            nursery.cancel_scope.cancel()
+
+    async def _run_send(self):
+        async for msg in self._outgoing_recv_chan:
+            await self._stream.send_all(bytes(msg))
+
+    async def _run_recv(self):
         buf = b''
         while True:
-            received_data = await self._stream.receive_some(BUFFER_SIZE)
-            if received_data == b'':
+            data = await self._stream.receive_some(BUFFER_SIZE)
+            if data == b'':
                 raise OperationalError('Database connection broken')
-            buf += received_data
+            buf += data
 
             start = 0
             while True:
@@ -115,21 +143,110 @@ class Connection:
                     break
                 logger.debug('Received PG message: {msg}')
 
-                if isinstance(msg, _pgmsg.ErrorResponse):
-                    await self._handle_error(msg)
-                    continue
-                if isinstance(msg, _pgmsg.NoticeResponse):
-                    await self._handle_notice(msg)
-                    continue
-
-                if not self._auth_ok.is_set():
-                    await self._handle_pre_auth_msg(msg)
+                if self._cur_msg_send_chan:
+                    await self._cur_msg_send_chan.send(msg)
                 else:
-                    await self._handle_msg(msg)
+                    await self._handle_unsolicited_msg(msg)
 
                 start += length
 
             buf = buf[start:]
+
+    async def _run_query_processor(self):
+        async for query in self._query_recv_chan:
+            self._cur_msg_send_chan, self._cur_msg_recv_chan = \
+                trio.open_memory_channel(0)
+            self._is_ready = False
+            try:
+                results = await self._process_query(query)
+            finally:
+                self._cur_msg_send_chan = None
+                self._cur_msg_recv_chan = None
+
+            await self._results_send_chan.send(results)
+
+    async def _process_query(self, query):
+        self._cur_msg_send_chan, self._cur_msg_recv_chan = \
+            trio.open_memory_channel(0)
+
+        msg = _pgmsg.Query(query.text)
+        await self._stream.send_all(bytes(msg))
+
+        msg = await self._get_msg(_pgmsg.RowDescription,
+                                  _pgmsg.EmptyQueryResponse,
+                                  _pgmsg.ErrorResponse)
+        if isinstance(msg, _pgmsg.EmptyQueryResponse):
+            return []
+        if isinstance(msg, _pgmsg.ErrorResponse):
+            raise self._get_exc_from_msg(
+                msg,
+                desc_prefix=(
+                    f'Error processing query: {query.text}\n   '
+                ),
+            )
+        row_desc = msg.fields
+
+        results = []
+        while msg := await self._get_msg(
+                _pgmsg.CommandComplete,
+                _pgmsg.DataRow,
+                _pgmsg.ReadyForQuery,
+                _pgmsg.ErrorResponse):
+            if isinstance(msg, _pgmsg.DataRow):
+                row = _parse_row.parse(msg.columns, row_desc)
+                results.append(row)
+            elif isinstance(msg, _pgmsg.CommandComplete):
+                if msg.cmd_tag.value.startswith(b'SELECT'):
+                    _, rows = msg.cmd_tag.value.split(b' ')
+                    self._query_row_count = int(rows.decode('ascii'))
+                else:
+                    self._query_row_count = None
+            elif isinstance(msg, _pgmsg.ReadyForQuery):
+                await self._handle_msg_ready_for_query(msg)
+                break
+            elif isinstance(msg, _pgmsg.ErrorResponse):
+                results = self._get_exc_from_msg(
+                    msg,
+                    desc_prefix=(
+                        f'Error processing query: {query.text}\n   '
+                    ),
+                )
+                break
+            else:
+                assert False, 'This should not happen!'
+
+        return results
+
+    async def _get_msg(self, *msg_types):
+        async for msg in self._cur_msg_recv_chan:
+            if type(msg) in msg_types:
+                return msg
+            else:
+                await self._handle_unsolicited_msg(msg)
+
+    async def _send_msg(self, msg):
+        await self._outgoing_send_chan.send(msg)
+
+    async def _handle_unsolicited_msg(self, msg):
+        if isinstance(msg, _pgmsg.NoticeResponse):
+            await self._handle_notice(msg)
+            return
+
+        if not self._auth_ok.is_set():
+            await self._handle_pre_auth_msg(msg)
+            return
+
+        handler = {
+            _pgmsg.BackendKeyData: self._handle_msg_backend_key_data,
+            _pgmsg.ErrorResponse: self._handle_error,
+            _pgmsg.ParameterStatus: self._handle_msg_parameter_status,
+            _pgmsg.ReadyForQuery: self._handle_msg_ready_for_query,
+        }.get(type(msg))
+        if not handler:
+            raise InternalError(
+                f'Unexpected unsolicited message type: {msg}')
+        await handler(msg)
+
 
     async def _handle_pre_auth_msg(self, msg):
         if isinstance(msg, _pgmsg.AuthenticationOk):
@@ -150,20 +267,10 @@ class Connection:
             await self._stream.send_all(bytes(msg))
             return
 
-    async def _handle_msg(self, msg):
-        handler = {
-            _pgmsg.BackendKeyData: self._handle_msg_backend_key_data,
-            _pgmsg.CommandComplete: self._handle_msg_command_complete,
-            _pgmsg.DataRow: self._handle_msg_data_row,
-            _pgmsg.ParameterStatus: self._handle_msg_parameter_status,
-            _pgmsg.ReadyForQuery: self._handle_msg_ready_for_query,
-            _pgmsg.RowDescription: self._handle_msg_row_description,
-        }.get(type(msg))
-        if not handler:
-            raise InternalError(f'Unhandled message type: {msg}')
-        await handler(msg)
-
     async def _handle_error(self, msg):
+        raise _get_exc_from_msg(msg)
+
+    def _get_exc_from_msg(self, msg, desc_prefix='', desc_suffix=''):
         fields = dict(msg.pairs)
 
         error_msg = fields.get('M')
@@ -174,7 +281,9 @@ class Connection:
         if severity is not None:
             severity = str(severity)
 
-        raise DatabaseError(
+        error_msg = desc_prefix + error_msg + desc_suffix
+
+        return DatabaseError(
             error_msg=error_msg,
             severity=severity,
         )
@@ -228,7 +337,6 @@ class Connection:
         if self._query_status == QueryStatus.IDLE:
             self._is_ready = True
             async with self._is_ready_cv:
-                print('notifying...')
                 self._is_ready_cv.notify()
 
     async def _handle_msg_row_description(self, msg):
@@ -282,6 +390,7 @@ class Connection:
         if resp != b'S':
             raise InternalError(
                 'Received unexpected response to SSL request')
+
         import ssl
         self._stream = trio.SSLStream(
             self._stream,
@@ -317,4 +426,4 @@ async def connect(database, *,
 
         yield conn
 
-        nursery.cancel_scope.cancel()
+        conn.close()
