@@ -169,10 +169,12 @@ class Connection:
         self._cur_msg_send_chan, self._cur_msg_recv_chan = \
             trio.open_memory_channel(0)
 
-        msg = _pgmsg.Query(query.text)
-        await self._stream.send_all(bytes(msg))
+        ## parse phase
 
-        msg = await self._get_msg(_pgmsg.RowDescription,
+        msg = _pgmsg.Parse('', query.text)
+        await self._send_msg(msg, _pgmsg.Flush())
+
+        msg = await self._get_msg(_pgmsg.ParseComplete,
                                   _pgmsg.EmptyQueryResponse,
                                   _pgmsg.ErrorResponse)
         if isinstance(msg, _pgmsg.EmptyQueryResponse):
@@ -181,17 +183,58 @@ class Connection:
             raise self._get_exc_from_msg(
                 msg,
                 desc_prefix=(
-                    f'Error processing query: {query.text}\n   '
+                    f'Error parsing query: {query.text}\n   '
                 ),
             )
-        row_desc = msg.fields
+        assert isinstance(msg, _pgmsg.ParseComplete)
+
+        ## bind phase
+
+        msg = _pgmsg.Bind('', '')
+        await self._send_msg(msg, _pgmsg.Flush())
+
+        msg = await self._get_msg(_pgmsg.BindComplete,
+                                  _pgmsg.ErrorResponse)
+        if isinstance(msg, _pgmsg.ErrorResponse):
+            raise self._get_exc_from_msg(
+                msg,
+                desc_prefix=(
+                    f'Error binding query: {query.text}\n   '
+                ),
+            )
+        assert isinstance(msg, _pgmsg.BindComplete)
+
+        ## describe phase
+
+        msg = _pgmsg.Describe(b'P', '')
+        await self._send_msg(msg, _pgmsg.Flush())
+
+        msg = await self._get_msg(_pgmsg.RowDescription,
+                                  _pgmsg.NoData,
+                                  _pgmsg.ErrorResponse)
+        if isinstance(msg, _pgmsg.ErrorResponse):
+            # DESCRIBE command _can_ return an error, but only if the
+            # portal/prepared statement specified does not exist. In
+            # our case, this should never happen.
+            raise InternalError(
+                f'DESCRIBE command returned an error: {msg}')
+        elif isinstance(msg, _pgmsg.RowDescription):
+            row_desc = msg.fields
+        else:
+            # NoData is sent when the query will return no rows
+            assert isinstance(msg, _pgmsg.NoData)
+
+        ## execute phase
+
+        msg = _pgmsg.Execute('')
+        await self._send_msg(msg, _pgmsg.Flush())
 
         results = []
         while msg := await self._get_msg(
                 _pgmsg.CommandComplete,
                 _pgmsg.DataRow,
-                _pgmsg.ReadyForQuery,
-                _pgmsg.ErrorResponse):
+                _pgmsg.ErrorResponse,
+                _pgmsg.PortalSuspended):
             if isinstance(msg, _pgmsg.DataRow):
                 row = _parse_row.parse(msg.columns, row_desc)
                 results.append(row)
@@ -201,8 +244,6 @@ class Connection:
                     self._query_row_count = int(rows.decode('ascii'))
                 else:
                     self._query_row_count = None
-            elif isinstance(msg, _pgmsg.ReadyForQuery):
-                await self._handle_msg_ready_for_query(msg)
                 break
             elif isinstance(msg, _pgmsg.ErrorResponse):
                 results = self._get_exc_from_msg(
@@ -212,8 +253,41 @@ class Connection:
                     ),
                 )
                 break
+            elif isinstance(msg, _pgmsg.PortalSuspended):
+                raise InternalError(
+                    'Encountered PortalSuspended but this should not '
+                    'happen in current implementation, since we do not '
+                    'set max_rows to a non-zero value.')
             else:
                 assert False, 'This should not happen!'
+
+        ## close phase
+
+        msg = _pgmsg.Close(b'P', '')
+        await self._send_msg(msg, _pgmsg.Sync())
+
+        msg = await self._get_msg(_pgmsg.CloseComplete,
+                                  _pgmsg.ErrorResponse)
+        if isinstance(msg, _pgmsg.ErrorResponse):
+            raise self._get_exc_from_msg(
+                msg,
+                desc_prefix=(
+                    f'Error parsing query: {query.text}\n   '
+                ),
+            )
+        assert isinstance(msg, _pgmsg.CloseComplete)
+
+        msg = await self._get_msg(_pgmsg.ReadyForQuery,
+                                  _pgmsg.ErrorResponse)
+        if isinstance(msg, _pgmsg.ErrorResponse):
+            raise self._get_exc_from_msg(
+                msg,
+                desc_prefix=(
+                    f'Error parsing query: {query.text}\n   '
+                ),
+            )
+        assert isinstance(msg, _pgmsg.ReadyForQuery)
+        self._handle_msg_ready_for_query(msg)
 
         return results
 
@@ -224,8 +298,9 @@ class Connection:
             else:
                 await self._handle_unsolicited_msg(msg)
 
-    async def _send_msg(self, msg):
-        await self._outgoing_send_chan.send(msg)
+    async def _send_msg(self, *msgs):
+        data = b''.join(bytes(msg) for msg in msgs)
+        await self._outgoing_send_chan.send(data)
 
     async def _handle_unsolicited_msg(self, msg):
         if isinstance(msg, _pgmsg.NoticeResponse):
@@ -268,7 +343,7 @@ class Connection:
             return
 
     async def _handle_error(self, msg):
-        raise _get_exc_from_msg(msg)
+        raise self._get_exc_from_msg(msg)
 
     def _get_exc_from_msg(self, msg, desc_prefix='', desc_suffix=''):
         fields = dict(msg.pairs)

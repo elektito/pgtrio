@@ -65,12 +65,17 @@ class Byte1(PgDataType):
 
 class String(PgDataType):
     def __init__(self, value: bytes):
-        if not isinstance(value, bytes):
-            raise ValueError
+        if not isinstance(value, (bytes, str)):
+            raise ValueError(
+                'String.__init__ should be passed a bytes or str '
+                f'object, not a "{type(value)}"')
         self.value = value
 
     def __bytes__(self):
-        return self.value + b'\0'
+        value = self.value
+        if isinstance(value, str):
+            value = value.encode('utf-8')
+        return value + b'\0'
 
     def __repr__(self):
         return f'"{str(self)}"'
@@ -97,43 +102,69 @@ class String(PgDataType):
 #
 
 
-# maps message types to their relevant sub-class of PgMessage. this
-# will be populated by PgMessageMetaClass.
-msg_classes = {}
-
-
 # metaclass for all postgres message classes, applied through the base
 # class PgMessage
 class PgMessageMetaClass(type):
     def __new__(cls, name, bases, attrs, **kwargs):
         if name != 'PgMessage':
-            if '_type' not in attrs:
+            klass = PgMessageMetaClass._create_class(
+                cls, name, bases, attrs, **kwargs)
+        else:
+            klass = super().__new__(cls, name, bases, attrs)
+
+        return klass
+
+    @staticmethod
+    def _create_class(cls, name, bases, attrs, **kwargs):
+        if '_type' not in attrs:
+            #allow _type to be inherited
+            for base_class in bases:
+                if hasattr(base_class, '_type'):
+                    # don't use the _type here though, because we've
+                    # processed it already for the base class
+                    _type = None
+                    break
+            else:
                 raise TypeError(
-                    'PgMessage sub-class should have a _type attribute')
+                    f'Class {name} missing class variable "_type"')
+        else:
+            _type = attrs['_type']
 
-            if attrs['_type'] is not None:
-                if not isinstance(attrs['_type'], bytes) or \
-                   len(attrs['_type']) != 1:
-                    raise ValueError(
-                        '_type field should contain a bytes object of '
-                        'size 1.')
+        if 'side' not in kwargs:
+            raise TypeError(
+                f'Class {name} missing class keyword argument "side".')
+        side = kwargs['side']
 
-            for attr, value in attrs.items():
-                if attr.startswith('_'):
-                    continue
-                if not isinstance(value, PgDataType) and \
-                   not (isinstance(value, type) and \
-                        issubclass(value, PgDataType)) and \
-                   not callable(value):
-                    raise TypeError(
-                        'PgMessage sub-class fields should either by a '
-                        'sub-class of PgDataType, or an instance of '
-                        'such a sub-class, or a callable returning '
-                        'bytes.')
+        if _type is not None:
+            if not isinstance(_type, bytes) or len(_type) != 1:
+                raise ValueError(
+                    '_type field should contain a bytes object of '
+                    'size 1 or None.')
 
-        klass = super().__new__(cls, name, bases, attrs, **kwargs)
-        if name != 'PgMessage' and attrs['_type'] is not None:
-            msg_classes[attrs['_type']] = klass
+        if side not in ['backend', 'frontend', 'both']:
+            raise ValueError(
+                'Class argument "side" can only have one of these '
+                'values: backend, frontend, both')
+
+        # store the side argument as a class variable
+        attrs['_side'] = side
+
+        for attr, value in attrs.items():
+            if attr.startswith('_'):
+                continue
+            if not isinstance(value, PgDataType) and \
+               not (isinstance(value, type) and \
+                    issubclass(value, PgDataType)) and \
+               not callable(value):
+                raise TypeError(
+                    'PgMessage sub-class fields should either by a '
+                    'sub-class of PgDataType, or an instance of '
+                    'such a sub-class, or a callable returning '
+                    'bytes.')
+
+        klass = super().__new__(cls, name, bases, attrs)
+        if _type is not None and side != 'frontend':
+            PgMessage.msg_classes[_type] = klass
 
         return klass
 
@@ -145,6 +176,10 @@ class PgMessageMetaClass(type):
 # see list of messages here:
 # https://www.postgresql.org/docs/current/protocol-message-formats.html
 class PgMessage(metaclass=PgMessageMetaClass):
+    # maps message types to their relevant sub-class of
+    # PgMessage. this will be populated by PgMessageMetaClass.
+    msg_classes = {}
+
     def __bytes__(self):
         # calculate payload
         klass = type(self)
@@ -186,7 +221,7 @@ class PgMessage(metaclass=PgMessageMetaClass):
             return None, 0
 
         msg_type = msg[start + 0:start + 1]
-        subclass = msg_classes.get(msg_type)
+        subclass = PgMessage.msg_classes.get(msg_type)
         if subclass is None:
             raise ValueError(f'Unknown message type: {msg_type}')
 
@@ -254,7 +289,7 @@ class PgMessage(metaclass=PgMessageMetaClass):
 # all of these messages have the same _type field (R). the deserialize
 # method returns the appropriate sub-class, depending on the value of
 # the auth field.
-class Authentication(PgMessage):
+class Authentication(PgMessage, side='backend'):
     _type = b'R'
     auth = Int32(0)
     # depending on the value of the auth field, more fields might
@@ -294,40 +329,28 @@ class Authentication(PgMessage):
         raise ValueError(f'Unknown auth type: {auth}')
 
 
-class AuthenticationOk(Authentication):
-    # set this to None so that it's not automatically deserialized
-    # (Authentication class will handle deserialization)
-    _type = None
+class AuthenticationOk(Authentication, side='backend'):
     auth = Int32(0)
 
     def __repr__(self):
         return f'<AuthenticationOk>'
 
 
-class AuthenticationKerberosV5(Authentication):
-    # set this to None so that it's not automatically deserialized
-    # (Authentication class will handle deserialization)
-    _type = None
+class AuthenticationKerberosV5(Authentication, side='backend'):
     auth = Int32(2)
 
     def __repr__(self):
         return f'<AuthenticationKerberosV5>'
 
 
-class AuthenticationCleartextPassword(Authentication):
-    # set this to None so that it's not automatically deserialized
-    # (Authentication class will handle deserialization)
-    _type = None
+class AuthenticationCleartextPassword(Authentication, side='backend'):
     auth = Int32(3)
 
     def __repr__(self):
         return f'<AuthenticationCleartextPassword>'
 
 
-class AuthenticationMD5Password(Authentication):
-    # set this to None so that it's not automatically deserialized
-    # (Authentication class will handle deserialization)
-    _type = None
+class AuthenticationMD5Password(Authentication, side='backend'):
     auth = Int32(5)
 
     def __init__(self, salt):
@@ -338,30 +361,21 @@ class AuthenticationMD5Password(Authentication):
         return f'<AuthenticationMD5Password salt="{salt}">'
 
 
-class AuthenticationSCMCredential(Authentication):
-    # set this to None so that it's not automatically deserialized
-    # (Authentication class will handle deserialization)
-    _type = None
+class AuthenticationSCMCredential(Authentication, side='backend'):
     auth = Int32(6)
 
     def __repr__(self):
         return f'<AuthenticationSCMCredential>'
 
 
-class AuthenticationGSS(Authentication):
-    # set this to None so that it's not automatically deserialized
-    # (Authentication class will handle deserialization)
-    _type = None
+class AuthenticationGSS(Authentication, side='backend'):
     auth = Int32(7)
 
     def __repr__(self):
         return f'<AuthenticationGSS>'
 
 
-class AuthenticationGSSContinue(Authentication):
-    # set this to None so that it's not automatically deserialized
-    # (Authentication class will handle deserialization)
-    _type = None
+class AuthenticationGSSContinue(Authentication, side='backend'):
     auth = Int32(8)
 
     def __init__(self, auth_data):
@@ -373,20 +387,14 @@ class AuthenticationGSSContinue(Authentication):
         return f'<AuthenticationGSSContinue auth_data={auth_data}>'
 
 
-class AuthenticationSSPI(Authentication):
-    # set this to None so that it's not automatically deserialized
-    # (Authentication class will handle deserialization)
-    _type = None
+class AuthenticationSSPI(Authentication, side='backend'):
     auth = Int32(9)
 
     def __repr__(self):
         return f'<AuthenticationSSPI>'
 
 
-class AuthenticationSASL(Authentication):
-    # set this to None so that it's not automatically deserialized
-    # (Authentication class will handle deserialization)
-    _type = None
+class AuthenticationSASL(Authentication, side='backend'):
     auth = Int32(10)
 
     def __init__(self, auth_mechanism):
@@ -398,10 +406,7 @@ class AuthenticationSASL(Authentication):
         return f'<AuthenticationSASL auth_mechanism={auth_mech}>'
 
 
-class AuthenticationSASLContinue(Authentication):
-    # set this to None so that it's not automatically deserialized
-    # (Authentication class will handle deserialization)
-    _type = None
+class AuthenticationSASLContinue(Authentication, side='backend'):
     auth = Int32(11)
 
     def __init__(self, data):
@@ -412,10 +417,7 @@ class AuthenticationSASLContinue(Authentication):
         return f'<AuthenticationSASLContinue auth_mechanism={data}>'
 
 
-class AuthenticationSASLFinal(Authentication):
-    # set this to None so that it's not automatically deserialized
-    # (Authentication class will handle deserialization)
-    _type = None
+class AuthenticationSASLFinal(Authentication, side='backend'):
     auth = Int32(12)
 
     def __init__(self, data):
@@ -426,7 +428,7 @@ class AuthenticationSASLFinal(Authentication):
         return f'<AuthenticationSASLFinal auth_mechanism={data}>'
 
 
-class BackendKeyData(PgMessage):
+class BackendKeyData(PgMessage, side='backend'):
     _type = b'K'
     pid = Int32
     secret_key = Int32
@@ -437,7 +439,76 @@ class BackendKeyData(PgMessage):
             f'secret_key={self.secret_key}>'
         )
 
-class CommandComplete(PgMessage):
+
+class Bind(PgMessage, side='frontend'):
+    _type = b'B'
+    portal_name = String
+    stmt_name = String
+    param_format_code_count = Int16
+    # if param_format_code_count is non-zero, a number of Int16's
+    # follow, specifying format codes of parameters (0 means text,
+    # which is the default, and 1 means binary)
+    param_count = Int16
+    # if param_count is non-zero, a number of (Int32, ByteN) pairs
+    # appear, specifying the length and content of parameters.
+    result_format_code_count = Int16
+    # if result_format_code_count is non-zero, a number of Int16's
+    # appear here, specifying the format codes of each column of
+    # results.
+
+    def __init__(self, portal_name, stmt_name, params=None,
+                 param_format_codes=None, result_format_codes=None):
+        self.portal_name = portal_name
+        self.stmt_name = stmt_name
+        self.params = params or []
+        self.param_format_codes = param_format_codes or []
+        self.result_format_codes = result_format_codes or []
+
+    def __bytes__(self):
+        portal_name = bytes(String(self.portal_name))
+        stmt_name = bytes(String(self.stmt_name))
+        param_format_code_count = bytes(
+            Int16(len(self.param_format_codes)))
+        param_format_codes = b''.join(
+            bytes(Int16(fc)) for fc in self.param_format_codes)
+        param_count = bytes(Int16(len(self.params)))
+        params = b''.join(
+            bytes(Int32(len(p))) + p for p in self.params
+        )
+        result_format_code_count = bytes(
+            Int16(len(self.result_format_codes)))
+        result_format_codes = b''.join(
+            bytes(Int16(fc)) for fc in self.result_format_codes)
+        length = bytes(Int32(
+            4 +
+            len(portal_name) +
+            len(stmt_name) +
+            len(param_format_code_count) +
+            len(param_format_codes) +
+            len(param_count) +
+            len(params) +
+            len(result_format_code_count) +
+            len(result_format_codes)
+        ))
+        return (
+            b'B' +
+            length +
+            portal_name +
+            stmt_name +
+            param_format_code_count +
+            param_format_codes +
+            param_count +
+            params +
+            result_format_code_count +
+            result_format_codes
+        )
+
+
+class BindComplete(PgMessage, side='backend'):
+    _type = b'2'
+
+
+class CommandComplete(PgMessage, side='backend'):
     _type = b'C'
     cmd_tag = String
 
@@ -449,32 +520,36 @@ class CommandComplete(PgMessage):
         return f'<CommandComplete tag="{tag}">'
 
 
-class Close(PgMessage):
-    # the Close message (which is a front-end message) has the same
-    # _type as the back-end CommandComplete message. we do not set the
-    # _type field here so that the CommandComplete class is registered
-    # for deserializing. The overridden __bytes__ method will set the
-    # type properly for serialization.
-    _type = None
+class Close(PgMessage, side='frontend'):
+    _type = b'C'
     type = Byte1
     name = String
 
+    def __init__(self, stmt_or_portal, name):
+        assert stmt_or_portal in (b'S', b'P')
+        self.type = stmt_or_portal
+        self.name = name
+
     def __bytes__(self):
         type_bytes = bytes(self.type)
-        name_bytes = bytes(self.name)
-        length = 1 + 4 + len(type_bytes) + len(name_bytes)
+        name_bytes = bytes(String(self.name))
+        length = bytes(Int32(4 + len(type_bytes) + len(name_bytes)))
         return b'C' + length + type_bytes + name_bytes
 
     def __repr__(self):
-        type = self.type.value.decode('ascii')
+        type = self.type.decode('ascii')
         try:
-            name = self.name.value.decode('ascii')
+            name = self.name.decode('ascii')
         except:
-            name = repr(self.name.value)[2:-1]
+            name = repr(self.name)[2:-1]
         return f'<Close type={type} name={name}>'
 
 
-class DataRow(PgMessage):
+class CloseComplete(PgMessage, side='backend'):
+    _type = b'3'
+
+
+class DataRow(PgMessage, side='backend'):
     _type = b'D'
     column_count = Int16
 
@@ -514,39 +589,39 @@ class DataRow(PgMessage):
         return obj
 
 
-class Describe(PgMessage):
-    # The Describe message (which is a front-end message) has the same
-    # _type as the DataRow message (which is a back-end message). we
-    # don't set the _type field here so that the DataRow message is
-    # allowed to be registered for deserialization. The overridden
-    # __bytes__ method will properly handle serialization.
-    _type = None
+class Describe(PgMessage, side='frontend'):
+    _type = b'D'
     type = Byte1
     name = String
 
+    def __init__(self, stmt_or_portal, name):
+        assert stmt_or_portal in (b'S', b'P')
+        self.type = stmt_or_portal
+        self.name = name
+
     def __bytes__(self):
         type_bytes = bytes(self.type)
-        name_bytes = bytes(self.name)
-        length = 1 + 4 + len(type_bytes) + len(name_bytes)
+        name_bytes = bytes(String(self.name))
+        length = bytes(Int32(4 + len(type_bytes) + len(name_bytes)))
         return b'D' + length + type_bytes + name_bytes
 
     def __repr__(self):
-        type = self.type.value.decode('ascii')
+        type = self.type.decode('ascii')
         try:
-            name = self.name.value.decode('ascii')
+            name = self.name.decode('ascii')
         except:
-            name = repr(self.name.value)[2:-1]
+            name = repr(self.name)[2:-1]
         return f'<Describe type={type} name={name}>'
 
 
-class EmptyQueryResponse(PgMessage):
+class EmptyQueryResponse(PgMessage, side='backend'):
     _type = b'I'
 
     def __repr__(self):
         return '<EmptyQueryResponse>'
 
 
-class ErrorResponse(PgMessage):
+class ErrorResponse(PgMessage, side='backend'):
     _type = b'E'
     # fields consist of one or more of (Byte1, String) pairs
 
@@ -580,14 +655,38 @@ class ErrorResponse(PgMessage):
         return obj
 
 
-class NegotiateProtocolVersion(PgMessage):
+class Execute(PgMessage, side='frontend'):
+    _type = b'E'
+    portal_name = String
+    max_rows = Int32
+
+    def __init__(self, portal_name, max_rows=0):
+        self.portal_name = portal_name
+        self.max_rows = max_rows
+
+    def __bytes__(self):
+        portal_name = bytes(String(self.portal_name))
+        max_rows = bytes(Int32(self.max_rows))
+        length = bytes(Int32(4 + len(portal_name) + len(max_rows)))
+        return b'E' + length + portal_name + max_rows
+
+
+class Flush(PgMessage, side='frontend'):
+    _type = b'H'
+
+
+class NegotiateProtocolVersion(PgMessage, side='backend'):
     _type = b'v'
     minor_ver_supported = Int32
     n_unrecognized_proto_options = Int32
     option_name = String
 
 
-class NoticeResponse(PgMessage):
+class NoData(PgMessage, side='backend'):
+    _type = b'n'
+
+
+class NoticeResponse(PgMessage, side='backend'):
     _type = b'N'
     # the message body contains one or more of (Byte1, String) pairs
     # each denoting a code and a value. The custom _deserializer
@@ -619,7 +718,7 @@ class NoticeResponse(PgMessage):
             idx += n
 
 
-class ParameterStatus(PgMessage):
+class ParameterStatus(PgMessage, side='backend'):
     _type = b'S'
     param_name = String
     param_value = String
@@ -631,7 +730,52 @@ class ParameterStatus(PgMessage):
         )
 
 
-class PasswordMessage(PgMessage):
+class Parse(PgMessage, side='frontend'):
+    _type = b'P'
+    name = String
+    query = String
+    param_type_count = Int16
+
+    # if param_type_count is non-zero, a number of Int32's follow,
+    # specifying the type of parameters
+
+    def __init__(self, name, query, param_types=None):
+        if isinstance(name, str):
+            name = name.encode('utf-8')
+        if isinstance(query, str):
+            query = query.encode('utf-8')
+        self.name = name
+        self.query = query
+        self.param_types = param_types or []
+
+    def __bytes__(self):
+        name = bytes(String(self.name))
+        query = bytes(String(self.query))
+        param_types = b''.join(
+            bytes(Int32(pt)) for pt in self.param_types)
+        param_type_count = bytes(Int16(len(self.param_types)))
+        length = bytes(Int32(
+            4 +
+            len(name) +
+            len(query) +
+            len(param_type_count) +
+            len(param_types)
+        ))
+        return (
+            b'P' +
+            length +
+            name +
+            query +
+            param_type_count +
+            param_types
+        )
+
+
+class ParseComplete(PgMessage, side='backend'):
+    _type = b'1'
+
+
+class PasswordMessage(PgMessage, side='frontend'):
     _type = b'p'
     password = String
 
@@ -671,7 +815,11 @@ class PasswordMessage(PgMessage):
         return f'<PasswordMessage password="{password}">'
 
 
-class Query(PgMessage):
+class PortalSuspended(PgMessage, side='backend'):
+    _type = b's'
+
+
+class Query(PgMessage, side='frontend'):
     _type = b'Q'
     query = String
 
@@ -686,7 +834,7 @@ class Query(PgMessage):
         self.query = query
 
 
-class ReadyForQuery(PgMessage):
+class ReadyForQuery(PgMessage, side='backend'):
     _type = b'Z'
     status = Byte1
 
@@ -708,7 +856,7 @@ class ReadyForQuery(PgMessage):
         return f'<ReadyForQuery status="{status}">'
 
 
-class RowDescription(PgMessage):
+class RowDescription(PgMessage, side='backend'):
     _type = b'T'
     nfields = Int16
     # after this, for each row field a number of fields follow, parsed
@@ -748,12 +896,12 @@ class RowDescription(PgMessage):
         return obj
 
 
-class SSLRequest(PgMessage):
+class SSLRequest(PgMessage, side='frontend'):
     _type = None # SSLRequest message has no type field
     ssl_request_code = Int32(80877103)
 
 
-class StartupMessage(PgMessage):
+class StartupMessage(PgMessage, side='frontend'):
     _type = None # startup message has no type field
     version = Int32(0x0003_0000) # protocol version 3.0
     # params = dynamic field
@@ -777,3 +925,7 @@ class StartupMessage(PgMessage):
             b'intervalstyle\0postgres\0' +
             b'\0'
         )
+
+
+class Sync(PgMessage, side='frontend'):
+    _type = b'S'
