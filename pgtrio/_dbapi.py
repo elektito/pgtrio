@@ -1,9 +1,11 @@
 import logging
 import trio
-from enum import Enum
+from enum import Enum, IntEnum
 from contextlib import asynccontextmanager
 from . import _pgmsg, _parse_row
-from ._exceptions import InternalError, DatabaseError, OperationalError
+from ._exceptions import (
+    InternalError, DatabaseError, OperationalError, ProgrammingError
+)
 
 DEFAULT_PG_UNIX_SOCKET = '/var/run/postgresql/.s.PGSQL.5432'
 BUFFER_SIZE = 204800
@@ -24,6 +26,13 @@ class QueryStatus(Enum):
                         # transaction
 
 
+class PgProtocolFormat(IntEnum):
+    TEXT = 0
+    BINARY = 1
+
+    _DEFAULT = BINARY
+
+
 class Query:
     def __init__(self, text, params):
         self.text = text
@@ -38,7 +47,8 @@ class Connection:
                  username=None,
                  password=None,
                  ssl=True,
-                 ssl_required=True):
+                 ssl_required=True,
+                 protocol_format=PgProtocolFormat._DEFAULT):
         self.database = database
         self.unix_socket_path = unix_socket_path
         self.host = host
@@ -46,13 +56,14 @@ class Connection:
         self.username = username
         self.password = password
         self.ssl = ssl
+        self.protocol_format = protocol_format
 
         self._stream = None
         self._nursery = None
         self._server_vars = {}
         self._notices = []
 
-        #self._query_status = QueryStatus.INITIALIZING
+        self._query_status = QueryStatus.INITIALIZING
         self._query_row_count = None
         self._query_results = []
         self._query_parse_phase_started = False
@@ -193,13 +204,16 @@ class Connection:
         if self._is_ready:
             return
 
+        if not self._query_execute_phase_started:
+            self._is_ready = True
+            return
+
         logger.debug(
             'Something bad happened during query execution. Continuing '
             'to consume and discard messages until we hit '
             'ReadyForQuery.')
 
-        if self._query_execute_phase_started and \
-           not self._query_close_phase_started:
+        if not self._query_close_phase_started:
             msg = _pgmsg.Close(b'P', '')
             await self._send_msg(msg, _pgmsg.Sync())
 
@@ -226,6 +240,12 @@ class Connection:
         self._cur_msg_send_chan, self._cur_msg_recv_chan = \
             trio.open_memory_channel(0)
 
+        self._query_parse_phase_started = False
+        self._query_bind_phase_started = False
+        self._query_describe_phase_started = False
+        self._query_execute_phase_started = False
+        self._query_close_phase_started = False
+
         ## parse phase
 
         msg = _pgmsg.Parse('', query.text)
@@ -249,7 +269,8 @@ class Connection:
 
         ## bind phase
 
-        msg = _pgmsg.Bind('', '')
+        msg = _pgmsg.Bind('', '',
+                          result_format_codes=[self.protocol_format])
         await self._send_msg(msg, _pgmsg.Flush())
 
         self._query_bind_phase_started = True
@@ -328,21 +349,25 @@ class Connection:
 
         ## close phase
 
-        msg = _pgmsg.Close(b'P', '')
-        await self._send_msg(msg, _pgmsg.Sync())
+        # if there was an error during execute, we shouldn't close
+        if not isinstance(results, Exception):
+            msg = _pgmsg.Close(b'P', '')
+            await self._send_msg(msg, _pgmsg.Sync())
 
-        self._query_close_phase_started = True
+            self._query_close_phase_started = True
 
-        msg = await self._get_msg(_pgmsg.CloseComplete,
-                                  _pgmsg.ErrorResponse)
-        if isinstance(msg, _pgmsg.ErrorResponse):
-            raise self._get_exc_from_msg(
-                msg,
-                desc_prefix=(
-                    f'Error parsing query: {query.text}\n   '
-                ),
-            )
-        assert isinstance(msg, _pgmsg.CloseComplete)
+            msg = await self._get_msg(_pgmsg.CloseComplete,
+                                      _pgmsg.ErrorResponse)
+            if isinstance(msg, _pgmsg.ErrorResponse):
+                raise self._get_exc_from_msg(
+                    msg,
+                    desc_prefix=(
+                        f'Error parsing query: {query.text}\n   '
+                    ),
+                )
+            assert isinstance(msg, _pgmsg.CloseComplete)
+        else:
+            await self._send_msg(_pgmsg.Sync())
 
         msg = await self._get_msg(_pgmsg.ReadyForQuery,
                                   _pgmsg.ErrorResponse)
