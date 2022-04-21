@@ -55,6 +55,11 @@ class Connection:
         #self._query_status = QueryStatus.INITIALIZING
         self._query_row_count = None
         self._query_results = []
+        self._query_parse_phase_started = False
+        self._query_bind_phase_started = False
+        self._query_describe_phase_started = False
+        self._query_execute_phase_started = False
+        self._query_close_phase_started = False
 
         self._is_ready = False
         self._is_ready_cv = trio.Condition()
@@ -99,6 +104,9 @@ class Connection:
         return self._notices
 
     async def execute(self, query, params={}):
+        if self._closed.is_set():
+            raise ProgrammingError('Connection is closed.')
+
         q = Query(query, params)
         self._have_query_results = trio.Event()
         await self._query_send_chan.send(q)
@@ -156,14 +164,63 @@ class Connection:
         async for query in self._query_recv_chan:
             self._cur_msg_send_chan, self._cur_msg_recv_chan = \
                 trio.open_memory_channel(0)
+
             self._is_ready = False
+
             try:
                 results = await self._process_query(query)
+            except:
+                results = None
+                raise
             finally:
+                try:
+                    await self._flush_extra_messages_after_query()
+                except:
+                    self.close()
+                    raise
+
                 self._cur_msg_send_chan = None
                 self._cur_msg_recv_chan = None
 
             await self._results_send_chan.send(results)
+
+    async def _flush_extra_messages_after_query(self):
+        # in case we fail processing a query midways (maybe due to an
+        # unexpected error), this routine ensures that we get to the
+        # ready state again; if this function raises an exception, we
+        # can't salvage the connection anymore and it must be closed.
+
+        if self._is_ready:
+            return
+
+        logger.debug(
+            'Something bad happened during query execution. Continuing '
+            'to consume and discard messages until we hit '
+            'ReadyForQuery.')
+
+        if self._query_execute_phase_started and \
+           not self._query_close_phase_started:
+            msg = _pgmsg.Close(b'P', '')
+            await self._send_msg(msg, _pgmsg.Sync())
+
+        msg_types_to_discard = [
+            _pgmsg.ParseComplete,
+            _pgmsg.EmptyQueryResponse,
+            _pgmsg.ErrorResponse,
+            _pgmsg.BindComplete,
+            _pgmsg.RowDescription,
+            _pgmsg.NoData,
+            _pgmsg.CommandComplete,
+            _pgmsg.DataRow,
+            _pgmsg.ErrorResponse,
+            _pgmsg.PortalSuspended,
+            _pgmsg.CloseComplete,
+            _pgmsg.ReadyForQuery,
+        ]
+        while not self._is_ready:
+            msg = await self._get_msg(*msg_types_to_discard)
+            if isinstance(msg, _pgmsg.ReadyForQuery):
+                await self._handle_msg_ready_for_query(msg)
 
     async def _process_query(self, query):
         self._cur_msg_send_chan, self._cur_msg_recv_chan = \
@@ -173,6 +230,8 @@ class Connection:
 
         msg = _pgmsg.Parse('', query.text)
         await self._send_msg(msg, _pgmsg.Flush())
+
+        self._query_parse_phase_started = True
 
         msg = await self._get_msg(_pgmsg.ParseComplete,
                                   _pgmsg.EmptyQueryResponse,
@@ -193,6 +252,8 @@ class Connection:
         msg = _pgmsg.Bind('', '')
         await self._send_msg(msg, _pgmsg.Flush())
 
+        self._query_bind_phase_started = True
+
         msg = await self._get_msg(_pgmsg.BindComplete,
                                   _pgmsg.ErrorResponse)
         if isinstance(msg, _pgmsg.ErrorResponse):
@@ -208,6 +269,8 @@ class Connection:
 
         msg = _pgmsg.Describe(b'P', '')
         await self._send_msg(msg, _pgmsg.Flush())
+
+        self._query_describe_phase_started = True
 
         msg = await self._get_msg(_pgmsg.RowDescription,
                                   _pgmsg.NoData,
@@ -228,6 +291,8 @@ class Connection:
 
         msg = _pgmsg.Execute('')
         await self._send_msg(msg, _pgmsg.Flush())
+
+        self._query_execute_phase_started = True
 
         results = []
         while msg := await self._get_msg(
@@ -265,6 +330,8 @@ class Connection:
 
         msg = _pgmsg.Close(b'P', '')
         await self._send_msg(msg, _pgmsg.Sync())
+
+        self._query_close_phase_started = True
 
         msg = await self._get_msg(_pgmsg.CloseComplete,
                                   _pgmsg.ErrorResponse)
