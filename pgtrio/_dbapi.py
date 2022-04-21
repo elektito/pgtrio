@@ -33,6 +33,20 @@ class PgProtocolFormat(IntEnum):
 
     _DEFAULT = BINARY
 
+    @staticmethod
+    def convert(value):
+        if isinstance(value, PgProtocolFormat):
+            return value
+        elif isinstance(value, str):
+            try:
+                return PgProtocolFormat[value.upper()]
+            except KeyError:
+                pass
+
+        raise ValueError(
+            'Invalid protocol format value. A PgProtocolFormat value '
+            'or its string representation is expected.')
+
 
 class Query:
     def __init__(self, text, params):
@@ -57,7 +71,7 @@ class Connection:
         self.username = username
         self.password = password
         self.ssl = ssl
-        self.protocol_format = protocol_format
+        self.protocol_format = PgProtocolFormat.convert(protocol_format)
 
         self._stream = None
         self._nursery = None
