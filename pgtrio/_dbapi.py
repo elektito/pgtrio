@@ -287,7 +287,7 @@ class Connection:
                 ),
             )
         assert isinstance(msg, _pgmsg.ReadyForQuery)
-        self._handle_msg_ready_for_query(msg)
+        await self._handle_msg_ready_for_query(msg)
 
         return results
 
