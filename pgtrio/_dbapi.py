@@ -2,6 +2,7 @@ import logging
 import trio
 from enum import Enum, IntEnum
 from contextlib import asynccontextmanager
+from functools import wraps
 from . import _pgmsg, _parse_row
 from ._exceptions import (
     InternalError, DatabaseError, OperationalError, ProgrammingError
@@ -566,24 +567,9 @@ class Connection:
 
 
 @asynccontextmanager
-async def connect(database, *,
-                  unix_socket_path=None,
-                  host=None,
-                  port=None,
-                  username=None,
-                  password=None,
-                  ssl=True,
-                  ssl_required=True):
-    conn = Connection(
-        database,
-        unix_socket_path=unix_socket_path,
-        host=host,
-        port=port,
-        username=username,
-        password=password,
-        ssl=ssl,
-        ssl_required=ssl_required,
-    )
+@wraps(Connection)
+async def connect(*args, **kwargs):
+    conn = Connection(*args, **kwargs)
     async with trio.open_nursery() as nursery:
         nursery.start_soon(conn._run)
 
