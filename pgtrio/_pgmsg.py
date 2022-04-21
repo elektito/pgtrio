@@ -562,7 +562,7 @@ class DataRow(PgMessage, side='backend'):
             self.columns = []
 
     def __repr__(self):
-        columns = ''.join(repr(c) for c in self.columns)
+        columns = ' '.join(repr(c) for c in self.columns)
         return f'<DataRow {columns}>'
 
     @classmethod
