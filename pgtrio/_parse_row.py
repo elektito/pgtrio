@@ -13,43 +13,11 @@ from ._exceptions import InterfaceError
 
 logger = logging.getLogger(__name__)
 interval_re = re.compile(
-    r'^'
-    r'((?P<years>[-+]?\d+) years? ?)?'
-    r'((?P<months>[-+]?\d+) mons? ?)?'
-    r'((?P<days>[-+]?\d+) days? ?)?'
-    r'((?P<time_sign>[-+])?(?P<hours>\d+):(?P<minutes>\d+):(?P<seconds>\d+)(\.(?P<microseconds>\d+))?)?'
-    r'$'
+    r'^(P((?P<years>[-\.\d]+?)Y)?((?P<months>[-\.\d]+?)M)?((?P<weeks>[-\.\d]+?)W)?((?P<days>[-\.\d]+?)D)?)?'
+    r'(T((?P<hours>[-\.\d]+?)H)?((?P<minutes>[-\.\d]+?)M)?((?P<seconds>[-\.\d]+?)S)?)?$'
 )
 pg_epoch = datetime(2000, 1, 1)
 pg_epoch_utc = datetime(2000, 1, 1, tzinfo=timezone.utc)
-
-
-class Interval:
-    def __init__(self, years=0, months=0, days=0, hours=0, minutes=0,
-                 seconds=0, microseconds=0):
-        self.years = years
-        self.months = months
-        self.days = days
-        self.hours = hours
-        self.minutes = minutes
-        self.seconds = seconds
-        self.microseconds = microseconds
-
-    def __repr__(self):
-        def fmt(value, unit):
-            if not value:
-                return ''
-            return f'{value} {unit}{"s" if value > 1 else ""} '
-        desc = ''
-        desc += fmt(self.years, 'year')
-        desc += fmt(self.months, 'month')
-        desc += fmt(self.days, 'day')
-        desc += fmt(self.hours, 'hour')
-        desc += fmt(self.minutes, 'minute')
-        desc += fmt(self.seconds, 'second')
-        desc += fmt(self.microseconds, 'microsecond')
-        desc = desc.rstrip()
-        return f'<Interval {desc}>'
 
 
 def parse(row, row_desc):
@@ -324,62 +292,17 @@ def text_parse_interval(value):
     m = interval_re.match(value)
     groups = m.groupdict()
 
-    years = groups.get('years', 0)
-    if years:
-        years = int(years)
+    values = {}
+    for i in ['years', 'months', 'weeks', 'days', 'hours', 'minutes',
+              'seconds']:
+        values[i] = float(groups.get(i) or 0)
 
-    months = groups.get('months', 0)
-    if months:
-        months = int(months)
+    days = values['years'] * 365 + values['months'] * 30 + values['days']
+    del values['years']
+    del values['months']
+    del values['days']
 
-    days = groups.get('days', 0)
-    if days:
-        days = int(days)
-
-    sign = groups.get('time_sign')
-    sign = -1 if sign == '-' else 1
-
-    hours = groups.get('hours', 0)
-    if hours:
-        hours = sign * int(hours)
-
-    minutes = groups.get('minutes', 0)
-    if minutes:
-        minutes = sign * int(minutes)
-
-    seconds = groups.get('seconds', 0)
-    if seconds:
-        seconds = sign * int(seconds)
-
-    microseconds = groups.get('microseconds', 0)
-    if microseconds:
-        # make sure the number is six digits so we get the correct
-        # microsecond value
-        if len(microseconds) < 6:
-            microseconds += '0' * (6 - len(microseconds))
-        microseconds = sign * int(microseconds)
-
-    years = years or 0
-    months = months or 0
-    days = days or 0
-    hours = hours or 0
-    minutes = minutes or 0
-    seconds = seconds or 0
-    microseconds = microseconds or 0
-
-    # we can't use python's timedelta here because it does not support
-    # years and months; and we can't reasonably convert those to days
-    # because it would require to know what sort of year and month we
-    # have (i.e. how many days there are in them).
-    return Interval(
-        years = years,
-        months=months,
-        days=days,
-        hours=hours,
-        minutes=minutes,
-        seconds=seconds,
-        microseconds=microseconds
-    )
+    return timedelta(days=days, **values)
 
 
 def binary_parse_interval(value):
@@ -394,41 +317,17 @@ def binary_parse_interval(value):
     days = int.from_bytes(days, byteorder='big', signed=True)
     months = int.from_bytes(months, byteorder='big', signed=True)
 
+    if months < 0:
+        years = -(-months // 12)
+        months = -(-months % 12)
+    else:
+        years = months // 12
+        months = months % 12
+
     time = timedelta(microseconds=time)
-    time = time.total_seconds()
+    time += timedelta(days=days + months * 30 + years * 365)
 
-    # calculate the hours, minutes, seconds and microseconds with the
-    # absolute value of time, then add the sign. This way, we get
-    # saner values. For example, if we don't do this, instead of -2
-    # seconds, we'd get "-1 hours 59 minutes 58 seconds" which is
-    # technically correct, but not one might expect.
-    sign = -1 if time < 0 else 1
-    time = abs(time)
-
-    hours = math.floor(time / 3600)
-    time -= hours * 3600
-    minutes = math.floor(time / 60)
-    time -= minutes * 60
-    seconds = math.floor(time)
-    microseconds = int((time - seconds) * 1000000)
-
-    hours = sign * hours
-    minutes = sign * minutes
-    seconds = sign * seconds
-    microseconds = sign * microseconds
-
-    years = math.floor(months / 12)
-    months -= years * 12
-
-    return Interval(
-        years = years,
-        months=months,
-        days=days,
-        hours=hours,
-        minutes=minutes,
-        seconds=seconds,
-        microseconds=microseconds
-    )
+    return time
 
 
 def text_parse_timetz(value):

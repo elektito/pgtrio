@@ -922,7 +922,7 @@ class StartupMessage(PgMessage, side='frontend'):
             b'database\0' +
             self.database + b'\0' +
             b'datestyle\0iso\0' +
-            b'intervalstyle\0postgres\0' +
+            b'intervalstyle\0iso_8601\0' +
             b'\0'
         )
 
