@@ -5,7 +5,8 @@ from contextlib import asynccontextmanager
 from functools import wraps
 from . import _pgmsg, _parse_row
 from ._exceptions import (
-    InternalError, DatabaseError, OperationalError, ProgrammingError
+    Error, InternalError, DatabaseError, OperationalError,
+    ProgrammingError
 )
 
 DEFAULT_PG_UNIX_SOCKET = '/var/run/postgresql/.s.PGSQL.5432'
@@ -52,6 +53,13 @@ class Query:
     def __init__(self, text, params):
         self.text = text
         self.params = params
+
+        # even though the null character is valid UTF-8, we can't use
+        # it in queries, because at the protocol level, the queries
+        # are sent as zero-terminated strings.
+        if '\x00' in self.text:
+            raise ProgrammingError(
+                'NULL character is not valid in PostgreSQL queries.')
 
 
 class Connection:
