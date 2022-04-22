@@ -1,2 +1,6 @@
 trio==0.20.0
 python-dateutil==2.8.2
+
+# for tests
+pytest==7.1.1
+pytest-trio==0.7.0
