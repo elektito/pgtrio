@@ -207,6 +207,8 @@ class Connection:
 
             try:
                 results = await self._process_query(query)
+            except Error as e:
+                results = e
             except:
                 results = None
                 raise
