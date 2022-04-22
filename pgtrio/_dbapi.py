@@ -273,10 +273,7 @@ class Connection:
         self._query_parse_phase_started = True
 
         msg = await self._get_msg(_pgmsg.ParseComplete,
-                                  _pgmsg.EmptyQueryResponse,
                                   _pgmsg.ErrorResponse)
-        if isinstance(msg, _pgmsg.EmptyQueryResponse):
-            return []
         if isinstance(msg, _pgmsg.ErrorResponse):
             raise self._get_exc_from_msg(
                 msg,
@@ -336,6 +333,7 @@ class Connection:
 
         results = []
         while msg := await self._get_msg(
+                _pgmsg.EmptyQueryResponse,
                 _pgmsg.CommandComplete,
                 _pgmsg.DataRow,
                 _pgmsg.ErrorResponse,
@@ -358,6 +356,9 @@ class Connection:
                     ),
                 )
                 break
+            elif isinstance(msg, _pgmsg.EmptyQueryResponse):
+                self._query_row_count = 0
+                return []
             elif isinstance(msg, _pgmsg.PortalSuspended):
                 raise InternalError(
                     'Encountered PortalSuspended but this should not '
