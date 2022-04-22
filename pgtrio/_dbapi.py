@@ -129,6 +129,10 @@ class Connection:
     def notices(self):
         return self._notices
 
+    @property
+    def rowcount(self):
+        return self._query_row_count
+
     async def execute(self, query, params={}):
         if self._closed.is_set():
             raise ProgrammingError('Connection is closed.')
