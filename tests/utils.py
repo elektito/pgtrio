@@ -75,10 +75,12 @@ def postgres_socket_file():
         os.unlink(log_file)
 
 
-@fixture
-async def conn(postgres_socket_file):
+@fixture(params=['binary', 'text'])
+async def conn(postgres_socket_file, request):
+    fmt = request.param
     async with pgtrio.connect(
             'postgres',
+            protocol_format=fmt,
             unix_socket_path=postgres_socket_file) as conn:
         await conn.execute('create database testdb')
 
