@@ -126,7 +126,7 @@ def text_parse_int8(value):
 
 
 def binary_parse_int8(value):
-    return struct.unpack('!q', value)
+    return int.from_bytes(value, byteorder='big', signed=True)
 
 
 def text_parse_int2(value):
@@ -166,7 +166,8 @@ def text_parse_float4(value):
 
 
 def binary_parse_float4(value):
-    return struct.unpack('!f', value)
+    value, = struct.unpack('!f', value)
+    return value
 
 
 def text_parse_float8(value):
@@ -174,7 +175,8 @@ def text_parse_float8(value):
 
 
 def binary_parse_float8(value):
-    return struct.unpack('!d', value)
+    value, = struct.unpack('!d', value)
+    return value
 
 
 def text_parse_inet(value):
