@@ -5,7 +5,6 @@ from tempfile import TemporaryDirectory, mkstemp
 from pathlib import Path
 from pytest import fixture
 
-TEST_DB_NAME = 'testdb'
 pg_ctl = None
 
 
@@ -35,7 +34,7 @@ def postgres_socket_file():
                 f'stderr:\n{proc.stderr.decode()}')
 
         pg_options = (
-            f'-F -c listen_addresses= '
+            f'-F -c listen_addresses="" '
             f'-c unix_socket_directories={socket_dir} '
         )
         start_cmd = [
