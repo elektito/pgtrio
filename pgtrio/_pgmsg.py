@@ -164,7 +164,7 @@ class PgMessageMetaClass(type):
 
         klass = super().__new__(cls, name, bases, attrs)
         if _type is not None and side != 'frontend':
-            PgMessage.msg_classes[_type] = klass
+            PgMessage._msg_classes[_type] = klass
 
         return klass
 
@@ -178,7 +178,7 @@ class PgMessageMetaClass(type):
 class PgMessage(metaclass=PgMessageMetaClass):
     # maps message types to their relevant sub-class of
     # PgMessage. this will be populated by PgMessageMetaClass.
-    msg_classes = {}
+    _msg_classes = {}
 
     def __bytes__(self):
         # calculate payload
@@ -221,7 +221,7 @@ class PgMessage(metaclass=PgMessageMetaClass):
             return None, 0
 
         msg_type = msg[start + 0:start + 1]
-        subclass = PgMessage.msg_classes.get(msg_type)
+        subclass = PgMessage._msg_classes.get(msg_type)
         if subclass is None:
             raise ValueError(f'Unknown message type: {msg_type}')
 
