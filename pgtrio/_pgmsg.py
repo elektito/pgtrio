@@ -5,11 +5,11 @@ import hashlib
 # https://www.postgresql.org/docs/current/protocol-message-types.html
 #
 
-class PgDataType:
+class PgBaseDataType:
     pass
 
 
-class Int16(PgDataType):
+class Int16(PgBaseDataType):
     def __init__(self, value: int):
         self.value = value
 
@@ -28,7 +28,7 @@ class Int16(PgDataType):
         return cls(value), 2
 
 
-class Int32(PgDataType):
+class Int32(PgBaseDataType):
     def __init__(self, value: int):
         self.value = value
 
@@ -47,7 +47,7 @@ class Int32(PgDataType):
         return cls(value), 4
 
 
-class Byte1(PgDataType):
+class Byte1(PgBaseDataType):
     def __init__(self, value: bytes):
         assert len(value) == 1
         self.value = value
@@ -63,7 +63,7 @@ class Byte1(PgDataType):
         return cls(msg[start:start+1]), 1
 
 
-class String(PgDataType):
+class String(PgBaseDataType):
     def __init__(self, value: bytes):
         if not isinstance(value, (bytes, str)):
             raise ValueError(
@@ -152,13 +152,13 @@ class PgMessageMetaClass(type):
         for attr, value in attrs.items():
             if attr.startswith('_'):
                 continue
-            if not isinstance(value, PgDataType) and \
+            if not isinstance(value, PgBaseDataType) and \
                not (isinstance(value, type) and \
-                    issubclass(value, PgDataType)) and \
+                    issubclass(value, PgBaseDataType)) and \
                not callable(value):
                 raise TypeError(
                     'PgMessage sub-class fields should either by a '
-                    'sub-class of PgDataType, or an instance of '
+                    'sub-class of PgBaseDataType, or an instance of '
                     'such a sub-class, or a callable returning '
                     'bytes.')
 
@@ -187,18 +187,18 @@ class PgMessage(metaclass=PgMessageMetaClass):
         for attr, field in vars(klass).items():
             if attr.startswith('_'):
                 continue
-            if isinstance(field, PgDataType):
+            if isinstance(field, PgBaseDataType):
                 # the field contains a concrete value (like Int32(40),
                 # which should always contain the value 40)
                 value = bytes(field)
             elif isinstance(field, type) and \
-                 issubclass(field, PgDataType):
+                 issubclass(field, PgBaseDataType):
                 # the field contains just a type (like Int32); the
                 # field value should have been set in the object
                 # itself before serialization attempt.
                 value = getattr(self, attr)
-                if not isinstance(value, PgDataType):
-                    # case it to the relevant PgDataType type
+                if not isinstance(value, PgBaseDataType):
+                    # case it to the relevant PgBaseDataType type
                     value = field(value)
             elif callable(field):
                 value = field(self)
@@ -256,12 +256,12 @@ class PgMessage(metaclass=PgMessageMetaClass):
             if attr.startswith('_'):
                 continue
 
-            if isinstance(value, PgDataType):
+            if isinstance(value, PgBaseDataType):
                 # the field contains a concrete value (like Int32(40),
                 # which should always contain the value 40)
                 field_type = type(value)
             elif isinstance(value, type) and \
-                 issubclass(value, PgDataType):
+                 issubclass(value, PgBaseDataType):
                 # the field contains just a type (like Int32)
                 field_type = value
             elif callable(value):
