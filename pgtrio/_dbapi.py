@@ -352,8 +352,8 @@ class Connection:
                 row = _parse_row.parse(msg.columns, row_desc)
                 results.append(row)
             elif isinstance(msg, _pgmsg.CommandComplete):
-                if msg.cmd_tag.value.startswith(b'SELECT'):
-                    _, rows = msg.cmd_tag.value.split(b' ')
+                if msg.cmd_tag.startswith(b'SELECT'):
+                    _, rows = msg.cmd_tag.split(b' ')
                     self._query_row_count = int(rows.decode('ascii'))
                 else:
                     self._query_row_count = None
@@ -508,8 +508,8 @@ class Connection:
             f'secret_key={msg.secret_key}')
 
     async def _handle_msg_command_complete(self, msg):
-        if msg.cmd_tag.value.startswith(b'SELECT'):
-            _, rows = msg.cmd_tag.value.split(b' ')
+        if msg.cmd_tag.startswith(b'SELECT'):
+            _, rows = msg.cmd_tag.split(b' ')
             self._query_row_count = int(rows.decode('ascii'))
         self._have_query_results.set()
 
@@ -526,11 +526,11 @@ class Connection:
             b'I': QueryStatus.IDLE,
             b'T': QueryStatus.IN_TRANSACTION,
             b'E': QueryStatus.ERROR,
-        }.get(msg.status.value)
+        }.get(msg.status)
         if self._query_status is None:
             raise InternalError(
                 'Unknown status value in ReadyForQuery message: '
-                f'{repr(msg.status.value)}')
+                f'{msg.status}')
         if self._query_status == QueryStatus.IDLE:
             self._is_ready = True
             async with self._is_ready_cv:

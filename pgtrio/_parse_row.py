@@ -84,18 +84,18 @@ def parse_col(col, col_desc):
         3802: binary_parse_jsonb,
     }
 
-    if format_code.value == 0:
-        parse_func = text_parse_funcs.get(type_oid.value)
-    elif format_code.value == 1:
-        parse_func = binary_parse_funcs.get(type_oid.value)
+    if format_code == 0:
+        parse_func = text_parse_funcs.get(type_oid)
+    elif format_code == 1:
+        parse_func = binary_parse_funcs.get(type_oid)
     else:
         raise InterfaceError(
-            f'Unexpected column format code: {format_code.value}')
+            f'Unexpected column format code: {format_code}')
 
     if parse_func is None:
         logger.debug(
             f'Did not find a column parser for type oid: '
-            f'{type_oid.value}')
+            f'{type_oid}')
         try:
             return col.decode('utf-8')
         except UnicodeDecodeError:

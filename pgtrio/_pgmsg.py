@@ -9,82 +9,63 @@ class PgBaseDataType:
     pass
 
 
-class Int16(PgBaseDataType):
-    def __init__(self, value: int):
-        self.value = value
-
+class _Int(int, PgBaseDataType):
     def __bytes__(self):
-        return self.value.to_bytes(length=2,
-                                   byteorder='big',
-                                   signed=True)
-
-    def __repr__(self):
-        return str(self.value)
+        return self.to_bytes(length=self._int_size,
+                             byteorder='big',
+                             signed=True)
 
     @classmethod
     def deserialize(cls, msg, start):
-        value = msg[start:start+2]
+        value = msg[start:start+cls._int_size]
         value = int.from_bytes(value, byteorder='big', signed=True)
-        return cls(value), 2
+        return cls(value), cls._int_size
 
 
-class Int32(PgBaseDataType):
-    def __init__(self, value: int):
-        self.value = value
-
-    def __bytes__(self):
-        return self.value.to_bytes(length=4,
-                                   byteorder='big',
-                                   signed=True)
-
-    def __repr__(self):
-        return str(self.value)
-
-    @classmethod
-    def deserialize(cls, msg, start):
-        value = msg[start:start+4]
-        value = int.from_bytes(value, byteorder='big', signed=True)
-        return cls(value), 4
+class Int8(_Int):
+    _int_size = 1
 
 
-class Byte1(PgBaseDataType):
-    def __init__(self, value: bytes):
+class Int16(_Int):
+    _int_size = 2
+
+
+class Int32(_Int):
+    _int_size = 4
+
+
+class Byte1(bytes, PgBaseDataType):
+    def __new__(cls, value):
+        assert isinstance(value, bytes)
         assert len(value) == 1
-        self.value = value
-
-    def __bytes__(self):
-        return self.value
+        return super().__new__(cls, value)
 
     def __repr__(self):
-        return f'{self.value} ({self.value[0]})'
+        return f'<Byte1 {super().__repr__()} ({self[0]})>'
 
     @classmethod
     def deserialize(cls, msg, start):
         return cls(msg[start:start+1]), 1
 
 
-class String(PgBaseDataType):
-    def __init__(self, value: bytes):
-        if not isinstance(value, (bytes, str)):
-            raise ValueError(
-                'String.__init__ should be passed a bytes or str '
-                f'object, not a "{type(value)}"')
-        self.value = value
-
-    def __bytes__(self):
-        value = self.value
+class String(bytes, PgBaseDataType):
+    def __new__(cls, value):
         if isinstance(value, str):
             value = value.encode('utf-8')
-        return value + b'\0'
+        assert isinstance(value, bytes)
+        return super().__new__(cls, value)
+
+    def __bytes__(self):
+        return self + b'\0'
 
     def __repr__(self):
-        return f'"{str(self)}"'
+        return f'<String "{self}">'
 
     def __str__(self):
         try:
-            value = self.value.decode('utf-8')
+            value = self.decode('utf-8')
         except UnicodeDecodeError:
-            value = self.value
+            value = super().__str__[1:] # remove the b prefix
         return f'{value}'
 
     @classmethod
@@ -298,7 +279,6 @@ class Authentication(PgMessage, side='backend'):
     @classmethod
     def _deserialize(cls, msg, start, length):
         auth, _ = Int32.deserialize(msg, start)
-        auth = auth.value
         if auth == 0:
             return AuthenticationOk()
         if auth == 2:
@@ -513,11 +493,7 @@ class CommandComplete(PgMessage, side='backend'):
     cmd_tag = String
 
     def __repr__(self):
-        try:
-            tag = self.cmd_tag.value.decode('utf-8')
-        except:
-            tag = repr(self.cmd_tag.value)[2:-1]
-        return f'<CommandComplete tag="{tag}">'
+        return f'<CommandComplete tag="{self.cmd_tag}">'
 
 
 class Close(PgMessage, side='frontend'):
@@ -573,16 +549,16 @@ class DataRow(PgMessage, side='backend'):
         obj.column_count, n = Int16.deserialize(msg, idx)
         idx += n
 
-        for i in range(obj.column_count.value):
+        for i in range(obj.column_count):
             column_size, n = Int32.deserialize(msg, idx)
             idx += n
 
-            if column_size.value < 0:
+            if column_size < 0:
                 # this is a NULL value
                 column_value = None
             else:
-                column_value = msg[idx:idx+column_size.value]
-                idx += column_size.value
+                column_value = msg[idx:idx+column_size]
+                idx += column_size
 
             obj.columns.append(column_value)
 
@@ -644,9 +620,9 @@ class ErrorResponse(PgMessage, side='backend'):
                     'Unterminated ErrorResponse message (should end '
                     'with a zero byte)')
             code, n = Byte1.deserialize(msg, idx)
-            if code.value == b'\0':
+            if code == b'\0':
                 break
-            code = repr(code.value)[2:-1] # convert e.g. b'C' to C
+            code = chr(code[0]) # convert e.g. b'C' to 'C'
             idx += n
             value, n = String.deserialize(msg, idx)
             idx += n
@@ -710,8 +686,9 @@ class NoticeResponse(PgMessage, side='backend'):
                     'Unterminated NoticeMessage message (should end '
                     'with a zero byte)')
             code, n = Byte1.deserialize(msg, start)
-            if code.value == b'\0':
+            if code == b'\0':
                 break
+            code = chr(code[0]) # convert e.g. b'C' to 'C'
             idx += n
             value, n = String.deserialize(msg, start)
             obj.notices.append((code, value))
@@ -840,9 +817,9 @@ class ReadyForQuery(PgMessage, side='backend'):
 
     def __repr__(self):
         try:
-            status = self.status.value.decode('utf-8')
+            status = self.status.decode('utf-8')
         except UnicodeDecodeError:
-            status = str(self.status.value)
+            status = str(self.status)
 
         if status == 'I':
             status_desc = 'idle'
@@ -873,7 +850,6 @@ class RowDescription(PgMessage, side='backend'):
         obj = cls()
         idx = start
         obj.nfields, n = Int16.deserialize(msg, idx)
-        obj.nfields = obj.nfields.value
         idx += n
         while len(obj.fields) < obj.nfields:
             name, n = String.deserialize(msg, idx)
