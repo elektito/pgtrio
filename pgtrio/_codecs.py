@@ -12,6 +12,7 @@ from ipaddress import (
 )
 from functools import wraps
 from ._exceptions import InterfaceError
+from ._utils import PgProtocolFormat
 
 interval_re = re.compile(
     r'^(P((?P<years>[-\.\d]+?)Y)?((?P<months>[-\.\d]+?)M)?((?P<weeks>[-\.\d]+?)W)?((?P<days>[-\.\d]+?)D)?)?'
@@ -57,6 +58,25 @@ class CodecHelper:
                 'Codec should be a sub-class of Codec class')
         self._codecs[codec.pg_type] = codec
         self._type_name_to_codec[codec.pg_type] = codec
+
+    def encode_value(self, value, type_oid, protocol_format):
+        if value is None:
+            return None
+
+        type_name = self._oid_to_name.get(type_oid)
+        if type_name is None:
+            raise InterfaceError(f'Uknown type OID: {type_oid}')
+
+        codec = self._type_name_to_codec.get(type_name)
+        if type_name is None:
+            raise InterfaceError(
+                f'No codec to encode parameter "{value}" to type '
+                f'"{type_name}"')
+
+        if protocol_format == PgProtocolFormat.TEXT:
+            return codec.encode_text(value)
+        else:
+            return codec.encode_binary(value)
 
     def decode_row(self, columns, row_desc):
         row = []

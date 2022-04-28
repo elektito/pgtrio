@@ -453,7 +453,13 @@ class Bind(PgMessage, side='frontend'):
             bytes(Int16(fc)) for fc in self.param_format_codes)
         param_count = bytes(Int16(len(self.params)))
         params = b''.join(
-            bytes(Int32(len(p))) + p for p in self.params
+            # NULL values are indicated by setting the length field to
+            # -1
+            (
+                bytes(Int32(len(p) if p is not None else -1)) +
+                (b'' if p is None else p)
+            )
+            for p in self.params
         )
         result_format_code_count = bytes(
             Int16(len(self.result_format_codes)))
@@ -695,6 +701,31 @@ class NoticeResponse(PgMessage, side='backend'):
             idx += n
 
 
+class ParameterDescription(PgMessage, side='backend'):
+    _type = b't'
+    nparams = Int16
+    # after this, for each parameter an oid value follows. these will
+    # be gather in the param_oids field.
+
+    def __init__(self, param_oids=[]):
+        self.param_oids = []
+
+    def __repr__(self):
+        return f'<ParameterDescription {self.param_oids}>'
+
+    @classmethod
+    def _deserialize(cls, msg, start, length):
+        obj = cls()
+        idx = start
+        obj.nparams, n = Int16.deserialize(msg, idx)
+        idx += n
+        while len(obj.param_oids) < obj.nparams:
+            oid, n = Int32.deserialize(msg, idx)
+            idx += n
+            obj.param_oids.append(oid)
+        return obj
+
+
 class ParameterStatus(PgMessage, side='backend'):
     _type = b'S'
     param_name = String
@@ -842,8 +873,8 @@ class RowDescription(PgMessage, side='backend'):
     def __init__(self, fields=[]):
         self.fields = []
 
-    def __repr(self):
-        return repr(self.fields)
+    def __repr__(self):
+        return f'<RowDescription {self.fields}>'
 
     @classmethod
     def _deserialize(cls, msg, start, length):

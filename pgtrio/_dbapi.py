@@ -1,10 +1,11 @@
 import logging
 import trio
-from enum import Enum, IntEnum
+from enum import Enum
 from contextlib import asynccontextmanager
 from functools import wraps
 from . import _pgmsg
 from ._codecs import CodecHelper
+from ._utils import PgProtocolFormat
 from ._exceptions import (
     Error, InternalError, DatabaseError, OperationalError,
     ProgrammingError
@@ -29,29 +30,8 @@ class QueryStatus(Enum):
                         # transaction
 
 
-class PgProtocolFormat(IntEnum):
-    TEXT = 0
-    BINARY = 1
-
-    _DEFAULT = BINARY
-
-    @staticmethod
-    def convert(value):
-        if isinstance(value, PgProtocolFormat):
-            return value
-        elif isinstance(value, str):
-            try:
-                return PgProtocolFormat[value.upper()]
-            except KeyError:
-                pass
-
-        raise ValueError(
-            'Invalid protocol format value. A PgProtocolFormat value '
-            'or its string representation is expected.')
-
-
 class Query:
-    def __init__(self, text, params, *,
+    def __init__(self, text, *params,
                  dont_decode_values=False,
                  protocol_format=None):
         self.text = text
@@ -107,8 +87,9 @@ class Connection:
         self._query_row_count = None
         self._query_results = []
         self._query_parse_phase_started = False
+        self._query_describe_stmt_phase_started = False
         self._query_bind_phase_started = False
-        self._query_describe_phase_started = False
+        self._query_describe_portal_phase_started = False
         self._query_execute_phase_started = False
         self._query_close_phase_started = False
 
@@ -165,15 +146,15 @@ class Connection:
     def register_codec(self, codec):
         self._codec_helper.register_codec(codec)
 
-    async def execute(self, query, params={}):
+    async def execute(self, query, *params):
         if not self._pg_types_loaded.is_set():
             # the "if" is not technically necessary, but avoids an
             # extra trio checkpoint.
             await self._pg_types_loaded.wait()
 
-        return await self._execute(query, params)
+        return await self._execute(query, *params)
 
-    async def _execute(self, query, params={}, *,
+    async def _execute(self, query, *params,
                        dont_decode_values=False,
                        protocol_format=None):
         if self._closed.is_set():
@@ -181,7 +162,7 @@ class Connection:
 
         if protocol_format is None:
             protocol_format = self.protocol_format
-        q = Query(query, params,
+        q = Query(query, *params,
                   dont_decode_values=dont_decode_values,
                   protocol_format=protocol_format)
         self._have_query_results = trio.Event()
@@ -249,6 +230,9 @@ class Connection:
                 results = await self._process_query(query)
             except Error as e:
                 results = e
+            except (OverflowError, ValueError, TypeError) as e:
+                # allow certain BaseException errors to also propagate
+                results = e
             except:
                 results = None
                 raise
@@ -310,8 +294,9 @@ class Connection:
             trio.open_memory_channel(0)
 
         self._query_parse_phase_started = False
+        self._query_describe_stmt_phase_started = False
         self._query_bind_phase_started = False
-        self._query_describe_phase_started = False
+        self._query_describe_portal_phase_started = False
         self._query_execute_phase_started = False
         self._query_close_phase_started = False
 
@@ -333,13 +318,52 @@ class Connection:
             )
         assert isinstance(msg, _pgmsg.ParseComplete)
 
-        ## bind phase
+        ## describe statement phase
+
+        msg = _pgmsg.Describe(b'S', '')
+        await self._send_msg(msg, _pgmsg.Flush())
+
+        self._query_describe_stmt_phase_started = True
+
+        while msg := await self._get_msg(_pgmsg.RowDescription,
+                                         _pgmsg.ParameterDescription,
+                                         _pgmsg.NoData,
+                                         _pgmsg.ErrorResponse):
+            if isinstance(msg, _pgmsg.ErrorResponse):
+                # DESCRIBE command _can_ return an error, but only if the
+                # portal/prepared statement specified does not exist. In
+                # our case, this should never happen.
+                raise InternalError(
+                    f'DESCRIBE command returned an error: {msg}')
+            elif isinstance(msg, _pgmsg.RowDescription):
+                # ignore; we'll get the full row description after bind
+                break
+            elif isinstance(msg, _pgmsg.ParameterDescription):
+                param_oids = msg.param_oids
+            else:
+                # NoData is sent when the query will return no rows
+                assert isinstance(msg, _pgmsg.NoData)
+                break
+
+        # create parameter list
 
         if query.protocol_format is not None:
             protocol_format = query.protocol_format
         else:
             protocol_format = self.protocol_format
+
+        params = []
+        for param, param_oid in zip(query.params, param_oids):
+            param_value = self._codec_helper.encode_value(
+                param, param_oid,
+                protocol_format=protocol_format)
+            params.append(param_value)
+
+        ## bind phase
+
         msg = _pgmsg.Bind('', '',
+                          params=params,
+                          param_format_codes=[protocol_format],
                           result_format_codes=[protocol_format])
         await self._send_msg(msg, _pgmsg.Flush())
 
@@ -356,12 +380,12 @@ class Connection:
             )
         assert isinstance(msg, _pgmsg.BindComplete)
 
-        ## describe phase
+        ## describe portal phase
 
         msg = _pgmsg.Describe(b'P', '')
         await self._send_msg(msg, _pgmsg.Flush())
 
-        self._query_describe_phase_started = True
+        self._query_describe_portal_phase_started = True
 
         msg = await self._get_msg(_pgmsg.RowDescription,
                                   _pgmsg.NoData,
