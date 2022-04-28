@@ -23,6 +23,11 @@ pg_epoch_utc = datetime(2000, 1, 1, tzinfo=timezone.utc)
 builtin_codecs = {}
 
 
+def register_builtin_codec(codec):
+    builtin_codecs[codec.pg_type] = codec
+    return codec
+
+
 class CodecHelper:
     def __init__(self):
         self._codecs = builtin_codecs
@@ -45,6 +50,13 @@ class CodecHelper:
             if name == type_name:
                 self._type_name_to_codec[name] = codec
                 break
+
+    def register_codec(self, codec):
+        if not isinstance(codec, type) or not issubclass(codec, Codec):
+            raise TypeError(
+                'Codec should be a sub-class of Codec class')
+        self._codecs[codec.pg_type] = codec
+        self._type_name_to_codec[codec.pg_type] = codec
 
     def decode_row(self, columns, row_desc):
         row = []
@@ -137,7 +149,6 @@ class CodecMetaclass(type):
                             klass.python_types,
                             klass.pg_type))
 
-        builtin_codecs[klass.pg_type] = klass
         return klass
 
     @classmethod
@@ -213,24 +224,28 @@ class _Int(Codec):
                               signed=True)
 
 
+@register_builtin_codec
 class Int2(_Int):
     pg_type = 'int2'
     python_types = [int]
     _int_length = 2
 
 
+@register_builtin_codec
 class Int4(_Int):
     pg_type = 'int4'
     python_types = [int]
     _int_length = 4
 
 
+@register_builtin_codec
 class Int8(_Int):
     pg_type = 'int8'
     python_types = [int]
     _int_length = 8
 
 
+@register_builtin_codec
 class Bool(Codec):
     pg_type = 'bool'
     python_types = [bool]
@@ -252,6 +267,7 @@ class Bool(Codec):
         return b'\x01' if value else b'\x00'
 
 
+@register_builtin_codec
 class ByteA(Codec):
     pg_type = 'bytea'
     python_types = [bytes]
@@ -274,6 +290,7 @@ class ByteA(Codec):
         return value
 
 
+@register_builtin_codec
 class Text(Codec):
     pg_type = 'text'
     python_types = [str]
@@ -295,6 +312,7 @@ class Text(Codec):
         return value.encode('utf-8')
 
 
+@register_builtin_codec
 class Json(Codec):
     pg_type = 'json'
     python_types = [dict, list]
@@ -316,6 +334,7 @@ class Json(Codec):
         return orjson.dumps(value)
 
 
+@register_builtin_codec
 class Jsonb(Codec):
     pg_type = 'jsonb'
     python_types = [dict, list]
@@ -342,6 +361,7 @@ class Jsonb(Codec):
         return b'\x01' + orjson.dumps(value)
 
 
+@register_builtin_codec
 class Float4(Codec):
     pg_type = 'float4'
     python_types = [float, int]
@@ -364,6 +384,7 @@ class Float4(Codec):
         return struct.pack('!f', value)
 
 
+@register_builtin_codec
 class Float8(Codec):
     pg_type = 'float8'
     python_types = [float, int]
@@ -386,6 +407,7 @@ class Float8(Codec):
         return struct.pack('!d', value)
 
 
+@register_builtin_codec
 class Inet(Codec):
     pg_type = 'inet'
     python_types = [IPv4Address, IPv6Address]
@@ -407,6 +429,7 @@ class Inet(Codec):
         return encode_inet_or_cidr(value)
 
 
+@register_builtin_codec
 class Cidr(Codec):
     pg_type = 'cidr'
     python_types = [IPv4Network, IPv6Network]
@@ -428,6 +451,7 @@ class Cidr(Codec):
         return encode_inet_or_cidr(value)
 
 
+@register_builtin_codec
 class Char(Codec):
     pg_type = 'bpchar'
     python_types = [str]
@@ -449,6 +473,7 @@ class Char(Codec):
         return value[0].encode('utf-8')
 
 
+@register_builtin_codec
 class Varchar(Codec):
     pg_type = 'varchar'
     python_types = [str]
@@ -470,6 +495,7 @@ class Varchar(Codec):
         return value.encode('utf-8')
 
 
+@register_builtin_codec
 class Date(Codec):
     pg_type = 'date'
     python_types = [date]
@@ -496,6 +522,7 @@ class Date(Codec):
         return days.to_bytes(length=4, byteorder='big', signed=True)
 
 
+@register_builtin_codec
 class Time(Codec):
     pg_type = 'time'
     python_types = [time]
@@ -527,6 +554,7 @@ class Time(Codec):
         return useconds.to_bytes(length=8, byteorder='big', signed=True)
 
 
+@register_builtin_codec
 class DateTime(Codec):
     pg_type = 'timestamp'
     python_types = [datetime]
@@ -550,6 +578,7 @@ class DateTime(Codec):
         return useconds.to_bytes(length=8, byteorder='big', signed=True)
 
 
+@register_builtin_codec
 class DateTimeTz(Codec):
     pg_type = 'timestamptz'
     python_types = [datetime]
@@ -575,6 +604,7 @@ class DateTimeTz(Codec):
         return useconds.to_bytes(length=8, byteorder='big', signed=True)
 
 
+@register_builtin_codec
 class Interval(Codec):
     pg_type = 'interval'
     python_types = [timedelta]
@@ -685,6 +715,7 @@ class Interval(Codec):
         return time + days + months
 
 
+@register_builtin_codec
 class TimeTz(Codec):
     pg_type = 'timetz'
     python_types = [time]

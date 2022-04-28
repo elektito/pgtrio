@@ -162,6 +162,9 @@ class Connection:
     def rowcount(self):
         return self._query_row_count
 
+    def register_codec(self, codec):
+        self._codec_helper.register_codec(codec)
+
     async def execute(self, query, params={}):
         if not self._pg_types_loaded.is_set():
             # the "if" is not technically necessary, but avoids an

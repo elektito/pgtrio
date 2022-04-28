@@ -1,4 +1,5 @@
 from ._dbapi import connect, PgProtocolFormat
+from ._codecs import Codec
 from ._exceptions import (
     Warning, Error, InterfaceError, DatabaseError, DataError,
     OperationalError, IntegrityError, InternalError, ProgrammingError,
