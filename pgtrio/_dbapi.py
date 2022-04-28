@@ -116,11 +116,6 @@ class Connection:
         # _run_recv task
         self._cur_msg_send_chan, self._cur_msg_recv_chan = None, None
 
-        # this will be initialized to a new trio.Event when performing
-        # a query, and the event is set when the results for that
-        # query arrives
-        self._have_query_results = None
-
         # this is set when we receive AuthenticationOk from postgres
         self._auth_ok = trio.Event()
 
@@ -165,7 +160,6 @@ class Connection:
         q = Query(query, *params,
                   dont_decode_values=dont_decode_values,
                   protocol_format=protocol_format)
-        self._have_query_results = trio.Event()
         await self._query_send_chan.send(q)
         results = await self._results_recv_chan.receive()
         if isinstance(results, Exception):
@@ -583,7 +577,6 @@ class Connection:
         if msg.cmd_tag.startswith(b'SELECT'):
             _, rows = msg.cmd_tag.split(b' ')
             self._query_row_count = int(rows.decode('ascii'))
-        self._have_query_results.set()
 
     async def _handle_msg_parameter_status(self, msg):
         self._server_vars[msg.param_name] = msg.param_value
