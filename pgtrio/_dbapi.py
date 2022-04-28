@@ -3,7 +3,8 @@ import trio
 from enum import Enum, IntEnum
 from contextlib import asynccontextmanager
 from functools import wraps
-from . import _pgmsg, _parse_row
+from . import _pgmsg
+from ._codecs import CodecHelper
 from ._exceptions import (
     Error, InternalError, DatabaseError, OperationalError,
     ProgrammingError
@@ -50,9 +51,13 @@ class PgProtocolFormat(IntEnum):
 
 
 class Query:
-    def __init__(self, text, params):
+    def __init__(self, text, params, *,
+                 dont_decode_values=False,
+                 protocol_format=None):
         self.text = text
         self.params = params
+        self.dont_decode_values = dont_decode_values
+        self.protocol_format = protocol_format
 
         # even though the null character is valid UTF-8, we can't use
         # it in queries, because at the protocol level, the queries
@@ -60,6 +65,16 @@ class Query:
         if '\x00' in self.text:
             raise ProgrammingError(
                 'NULL character is not valid in PostgreSQL queries.')
+
+    def __repr__(self):
+        extra = []
+        if self.dont_decode_values:
+            extra.append('no_decode')
+        if self.protocol_format is not None:
+            extra.append(self.protocol_format.name.lower())
+        if extra:
+            extra = ' ' + ' '.join(extra)
+        return f'<Query text="{self.text}"{extra}>'
 
 
 class Connection:
@@ -82,6 +97,8 @@ class Connection:
         self.protocol_format = PgProtocolFormat.convert(protocol_format)
 
         self._stream = None
+        self._codec_helper = CodecHelper()
+
         self._nursery = None
         self._server_vars = {}
         self._notices = []
@@ -129,6 +146,10 @@ class Connection:
         # this is set by the close() method
         self._closed = trio.Event()
 
+        # this is set when postgres type info is loaded from the
+        # pg_catalog.pg_type table
+        self._pg_types_loaded = trio.Event()
+
     @property
     def server_vars(self):
         return self._server_vars
@@ -142,10 +163,24 @@ class Connection:
         return self._query_row_count
 
     async def execute(self, query, params={}):
+        if not self._pg_types_loaded.is_set():
+            # the "if" is not technically necessary, but avoids an
+            # extra trio checkpoint.
+            await self._pg_types_loaded.wait()
+
+        return await self._execute(query, params)
+
+    async def _execute(self, query, params={}, *,
+                       dont_decode_values=False,
+                       protocol_format=None):
         if self._closed.is_set():
             raise ProgrammingError('Connection is closed.')
 
-        q = Query(query, params)
+        if protocol_format is None:
+            protocol_format = self.protocol_format
+        q = Query(query, params,
+                  dont_decode_values=dont_decode_values,
+                  protocol_format=protocol_format)
         self._have_query_results = trio.Event()
         await self._query_send_chan.send(q)
         results = await self._results_recv_chan.receive()
@@ -166,6 +201,8 @@ class Connection:
 
             msg = _pgmsg.StartupMessage(self.username, self.database)
             await self._send_msg(msg)
+
+            nursery.start_soon(self._load_pg_types)
 
             await self._closed.wait()
             nursery.cancel_scope.cancel()
@@ -295,8 +332,12 @@ class Connection:
 
         ## bind phase
 
+        if query.protocol_format is not None:
+            protocol_format = query.protocol_format
+        else:
+            protocol_format = self.protocol_format
         msg = _pgmsg.Bind('', '',
-                          result_format_codes=[self.protocol_format])
+                          result_format_codes=[protocol_format])
         await self._send_msg(msg, _pgmsg.Flush())
 
         self._query_bind_phase_started = True
@@ -349,8 +390,12 @@ class Connection:
                 _pgmsg.ErrorResponse,
                 _pgmsg.PortalSuspended):
             if isinstance(msg, _pgmsg.DataRow):
-                row = _parse_row.parse(msg.columns, row_desc)
-                results.append(row)
+                if not query.dont_decode_values:
+                    row = self._codec_helper.decode_row(
+                        msg.columns, row_desc)
+                    results.append(row)
+                else:
+                    results.append(msg.columns)
             elif isinstance(msg, _pgmsg.CommandComplete):
                 if msg.cmd_tag.startswith(b'SELECT'):
                     _, rows = msg.cmd_tag.split(b' ')
@@ -513,10 +558,6 @@ class Connection:
             self._query_row_count = int(rows.decode('ascii'))
         self._have_query_results.set()
 
-    async def _handle_msg_data_row(self, msg):
-        row = _parse_row.parse(msg.columns, self._row_desc)
-        self._query_results.append(row)
-
     async def _handle_msg_parameter_status(self, msg):
         self._server_vars[msg.param_name] = msg.param_value
 
@@ -593,6 +634,14 @@ class Connection:
             self._stream,
             ssl.create_default_context()
         )
+
+    async def _load_pg_types(self):
+        results = await self._execute(
+            'select typname, oid from pg_catalog.pg_type',
+            dont_decode_values=True,
+            protocol_format=PgProtocolFormat.TEXT)
+        self._codec_helper.init(results)
+        self._pg_types_loaded.set()
 
 
 @asynccontextmanager

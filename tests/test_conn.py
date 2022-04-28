@@ -1,4 +1,4 @@
-from ipaddress import IPv4Address, IPv6Address
+from ipaddress import IPv4Address, IPv6Address, IPv4Network, IPv6Network
 from datetime import datetime, date, time, timedelta, timezone
 from pytest import fixture, raises, mark
 from utils import postgres_socket_file, conn
@@ -14,6 +14,15 @@ async def test_empty_query(conn):
     results = await conn.execute('')
     assert results == []
     assert conn.rowcount == 0
+
+
+async def test_null(conn):
+    await conn.execute('create table foobar (foo int, bar int)')
+    await conn.execute('insert into foobar (foo) values (1900)')
+    await conn.execute('insert into foobar (bar) values (1800)')
+    results = await conn.execute('select * from foobar')
+    assert conn.rowcount == 2
+    assert results == [(1900, None), (None, 1800)]
 
 
 async def test_float4(conn):
@@ -160,6 +169,19 @@ async def test_inet(conn):
     assert results == [
         (IPv4Address('192.168.1.100'),),
         (IPv6Address('::2'),),
+    ]
+
+
+async def test_cidr(conn):
+    await conn.execute('create table foobar (foo cidr)')
+    await conn.execute(
+        "insert into foobar (foo) values ('192.168.0.0/16')")
+    await conn.execute("insert into foobar (foo) values ('::/8')")
+    results = await conn.execute('select * from foobar')
+    assert conn.rowcount == 2
+    assert results == [
+        (IPv4Network('192.168.0.0/16'),),
+        (IPv6Network('::/8'),),
     ]
 
 
