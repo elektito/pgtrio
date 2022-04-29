@@ -6,6 +6,7 @@ from functools import wraps
 from . import _pgmsg
 from ._codecs import CodecHelper
 from ._utils import PgProtocolFormat
+from ._transaction import Transaction
 from ._exceptions import (
     InternalError, DatabaseError, OperationalError, ProgrammingError,
 )
@@ -167,6 +168,10 @@ class Connection:
 
     def close(self):
         self._closed.set()
+
+    @wraps(Transaction)
+    def transaction(self, *args, **kwargs):
+        return Transaction(self, *args, **kwargs)
 
     async def _run(self):
         await self._connect()
@@ -558,7 +563,8 @@ class Connection:
             raise InternalError(
                 'Unknown status value in ReadyForQuery message: '
                 f'{msg.status}')
-        if self._query_status == QueryStatus.IDLE:
+        if self._query_status in (QueryStatus.IDLE,
+                                  QueryStatus.IN_TRANSACTION):
             self._is_ready = True
             async with self._is_ready_cv:
                 self._is_ready_cv.notify()
