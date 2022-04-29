@@ -15,6 +15,8 @@ class Transaction:
         self.read_write_mode = read_write_mode
         self.deferrable = deferrable
 
+        self._savepoint_id = None
+
     async def commit(self):
         await self._commit()
         raise TransactionExit
@@ -24,19 +26,31 @@ class Transaction:
         raise TransactionExit
 
     async def _commit(self):
-        await self.conn.execute('commit')
+        if self._savepoint_id is None:
+            await self.conn.execute('commit')
+        else:
+            await self.conn.execute(
+                f'release savepoint {self._savepoint_id}')
 
     async def _rollback(self):
-        await self.conn.execute('rollback')
+        if self._savepoint_id is None:
+            await self.conn.execute('rollback')
+        else:
+            await self.conn.execute(f'rollback to {self._savepoint_id}')
 
     async def __aenter__(self):
-        query = 'begin'
-        if self.isolation_level:
-            query += f' isolation level {self.isolation_level}'
-        if self.read_write_mode:
-            query += f' {self.read_write_mode}'
-        if self.deferrable:
-            query += f' deferrable'
+        if self.conn.in_transaction:
+            spid = self.conn._get_unique_id('savepoint')
+            self._savepoint_id = f'pgtrio_sp_{spid}'
+            query = f'savepoint {self._savepoint_id}'
+        else:
+            query = 'begin'
+            if self.isolation_level:
+                query += f' isolation level {self.isolation_level}'
+            if self.read_write_mode:
+                query += f' {self.read_write_mode}'
+            if self.deferrable:
+                query += f' deferrable'
 
         await self.conn.execute(query)
 
@@ -47,10 +61,11 @@ class Transaction:
             # return True to signify we've handled the exception
             return True
 
-        if extype is None:
-            await self._commit()
-        else:
-            await self._rollback()
+        if not self.conn._closed.is_set():
+            if extype is None:
+                await self._commit()
+            else:
+                await self._rollback()
 
         # propagate exception (if any)
         return False

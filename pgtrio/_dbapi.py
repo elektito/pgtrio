@@ -3,6 +3,7 @@ import trio
 from enum import Enum
 from contextlib import asynccontextmanager
 from functools import wraps
+from collections import defaultdict
 from . import _pgmsg
 from ._codecs import CodecHelper
 from ._utils import PgProtocolFormat
@@ -82,6 +83,7 @@ class Connection:
         self._nursery = None
         self._server_vars = {}
         self._notices = []
+        self._id_counters = defaultdict(int)
 
         self._query_status = QueryStatus.INITIALIZING
         self._query_row_count = None
@@ -128,6 +130,10 @@ class Connection:
     @property
     def rowcount(self):
         return self._query_row_count
+
+    @property
+    def in_transaction(self):
+        return self._query_status == QueryStatus.IN_TRANSACTION
 
     def register_codec(self, codec):
         self._codec_helper.register_codec(codec)
@@ -238,7 +244,7 @@ class Connection:
             'ReadyForQuery.')
 
         if not self._query_close_phase_started:
-            msg = _pgmsg.Close(b'P', '')
+            msg = _pgmsg.Close(b'P', b'')
             await self._send_msg(msg, _pgmsg.Sync())
 
         msg_types_to_discard = [
@@ -291,7 +297,7 @@ class Connection:
 
         ## describe statement phase
 
-        msg = _pgmsg.Describe(b'S', '')
+        msg = _pgmsg.Describe(b'S', b'')
         await self._send_msg(msg, _pgmsg.Flush())
 
         self._query_describe_stmt_phase_started = True
@@ -353,7 +359,7 @@ class Connection:
 
         ## describe portal phase
 
-        msg = _pgmsg.Describe(b'P', '')
+        msg = _pgmsg.Describe(b'P', b'')
         await self._send_msg(msg, _pgmsg.Flush())
 
         self._query_describe_portal_phase_started = True
@@ -421,7 +427,7 @@ class Connection:
 
         ## close phase
 
-        msg = _pgmsg.Close(b'P', '')
+        msg = _pgmsg.Close(b'P', b'')
         await self._send_msg(msg, _pgmsg.Sync())
 
         self._query_close_phase_started = True
@@ -563,11 +569,10 @@ class Connection:
             raise InternalError(
                 'Unknown status value in ReadyForQuery message: '
                 f'{msg.status}')
-        if self._query_status in (QueryStatus.IDLE,
-                                  QueryStatus.IN_TRANSACTION):
-            self._is_ready = True
-            async with self._is_ready_cv:
-                self._is_ready_cv.notify()
+
+        self._is_ready = True
+        async with self._is_ready_cv:
+            self._is_ready_cv.notify()
 
     async def _handle_msg_row_description(self, msg):
         self._row_desc = msg.fields
@@ -634,6 +639,9 @@ class Connection:
             protocol_format=PgProtocolFormat.TEXT)
         self._codec_helper.init(results)
         self._pg_types_loaded.set()
+
+    def _get_unique_id(self, id_type):
+        return self._id_counters[id_type] + 1;
 
 
 @asynccontextmanager

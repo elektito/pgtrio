@@ -63,3 +63,69 @@ async def test_transaction_explicit_rollback(conn):
         await conn.execute('insert into foobar (foo) values (30)')
     results = await conn.execute('select * from foobar')
     assert results == [(10,),]
+
+
+async def test_savepoint_normal(conn):
+    await conn.execute('create table foobar (foo int)')
+    await conn.execute('insert into foobar (foo) values (10)')
+    async with conn.transaction():
+        await conn.execute('insert into foobar (foo) values (20)')
+        async with conn.transaction():
+            await conn.execute('insert into foobar (foo) values (30)')
+        await conn.execute('insert into foobar (foo) values (40)')
+
+    results = await conn.execute('select * from foobar')
+    assert results == [(10,), (20,), (30,), (40,)]
+
+
+async def test_savepoint_error(conn):
+    await conn.execute('create table foobar (foo int)')
+    await conn.execute('insert into foobar (foo) values (10)')
+    async with conn.transaction():
+        await conn.execute('insert into foobar (foo) values (20)')
+        try:
+            async with conn.transaction():
+                await conn.execute('insert into foobar (foo) values (30)')
+                raise RuntimeError
+        except RuntimeError:
+            pass
+        await conn.execute('insert into foobar (foo) values (40)')
+
+    results = await conn.execute('select * from foobar')
+    assert results == [(10,), (20,), (40,)]
+
+
+async def test_savepoint_rollback(conn):
+    await conn.execute('create table foobar (foo int)')
+    await conn.execute('insert into foobar (foo) values (10)')
+    async with conn.transaction():
+        await conn.execute('insert into foobar (foo) values (20)')
+        try:
+            async with conn.transaction() as sp:
+                await conn.execute('insert into foobar (foo) values (30)')
+                await sp.rollback()
+                await conn.execute('insert into foobar (foo) values (35)')
+        except RuntimeError:
+            pass
+        await conn.execute('insert into foobar (foo) values (40)')
+
+    results = await conn.execute('select * from foobar')
+    assert results == [(10,), (20,), (40,)]
+
+
+async def test_savepoint_commit(conn):
+    await conn.execute('create table foobar (foo int)')
+    await conn.execute('insert into foobar (foo) values (10)')
+    async with conn.transaction():
+        await conn.execute('insert into foobar (foo) values (20)')
+        try:
+            async with conn.transaction() as sp:
+                await conn.execute('insert into foobar (foo) values (30)')
+                await sp.commit()
+                await conn.execute('insert into foobar (foo) values (35)')
+        except RuntimeError:
+            pass
+        await conn.execute('insert into foobar (foo) values (40)')
+
+    results = await conn.execute('select * from foobar')
+    assert results == [(10,), (20,), (30,), (40,)]
