@@ -641,7 +641,9 @@ class Connection:
         self._pg_types_loaded.set()
 
     def _get_unique_id(self, id_type):
-        return self._id_counters[id_type] + 1;
+        self._id_counters[id_type] += 1
+        idx = self._id_counters[id_type]
+        return f'{id_type}_{idx}'
 
 
 @asynccontextmanager
