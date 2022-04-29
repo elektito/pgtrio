@@ -221,10 +221,6 @@ class Connection:
         if self._is_ready:
             return
 
-        if not self._query_execute_phase_started:
-            self._is_ready = True
-            return
-
         logger.debug(
             'Something bad happened during query execution. Continuing '
             'to consume and discard messages until we hit '
