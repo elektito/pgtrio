@@ -7,8 +7,7 @@ from . import _pgmsg
 from ._codecs import CodecHelper
 from ._utils import PgProtocolFormat
 from ._exceptions import (
-    Error, InternalError, DatabaseError, OperationalError,
-    ProgrammingError
+    InternalError, DatabaseError, OperationalError, ProgrammingError,
 )
 
 DEFAULT_PG_UNIX_SOCKET = '/var/run/postgresql/.s.PGSQL.5432'
@@ -144,8 +143,8 @@ class Connection:
         return await self._execute(query, *params)
 
     async def _execute(self, query, *params,
-                        dont_decode_values=False,
-                        protocol_format=None):
+                       dont_decode_values=False,
+                       protocol_format=None):
         if protocol_format is None:
             protocol_format = self.protocol_format
 
@@ -478,7 +477,6 @@ class Connection:
                 f'Unexpected unsolicited message type: {msg}')
         await handler(msg)
 
-
     async def _handle_pre_auth_msg(self, msg):
         if isinstance(msg, _pgmsg.AuthenticationOk):
             self._auth_ok.set()
@@ -523,8 +521,8 @@ class Connection:
         fields = dict(msg.pairs)
 
         notice_msg = fields.get('M')
-        if error_msg is not None:
-            error_msg = str(error_msg)
+        if notice_msg is not None:
+            notice_msg = str(notice_msg)
 
         severity = fields.get('S')
         if severity is not None:

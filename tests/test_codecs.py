@@ -22,35 +22,35 @@ def test_bytea():
     _test_codec(_codecs.ByteA, [b'', b'foobar'])
 
 
-def test_Int2():
+def test_int2():
     _test_codec(_codecs.Int2, [-2**15, 2**15-1, 0, 1000, -998])
 
 
-def test_Int4():
+def test_int4():
     _test_codec(_codecs.Int4, [-2**31, 2**31-1, 0, -998])
 
 
-def test_Int8():
+def test_int8():
     _test_codec(_codecs.Int8, [-2**63, 2**63-1, 0, -998])
 
 
-def test_Text():
+def test_text():
     _test_codec(_codecs.Text, ['', 'spam', 'eggs'])
 
 
-def test_Json():
+def test_json():
     _test_codec(
         _codecs.Json,
         [{}, [], {'foo': 100.5}, [{}, [{}], {'a': [1]}]])
 
 
-def test_Jsonb():
+def test_jsonb():
     _test_codec(
         _codecs.Jsonb,
         [{}, [], {'foo': 100.5}, [{}, [{}], {'a': [1]}]])
 
 
-def test_Float4():
+def test_float4():
     _test_codec(_codecs.Float4, [1.125-38, 2.5+38, 0, -1.5])
 
 
@@ -64,7 +64,7 @@ def test_float8():
     ])
 
 
-def test_Inet():
+def test_inet():
     _test_codec(
         _codecs.Inet,
         [ip_address('192.168.1.1'), ip_address('::3')])
@@ -77,25 +77,25 @@ def test_cidr():
     ])
 
 
-def test_Char():
+def test_char():
     _test_codec(_codecs.Char, ['\x00', 'A'])
 
 
-def test_Date():
+def test_date():
     _test_codec(_codecs.Date, [date(1982, 11, 28), date(1, 1, 2)])
 
 
-def test_Time():
+def test_time():
     _test_codec(_codecs.Time, [time(0, 0, 1), time(18, 19, 44)])
 
 
-def test_DateTime():
+def test_datetime():
     _test_codec(
         _codecs.DateTime,
         [datetime(2022, 4, 18, 1, 31, 43, 646120)])
 
 
-def test_timetz():
+def test_datetimetz():
     _test_codec(_codecs.DateTimeTz, [
         datetime(2022, 4, 18, 1, 31, 43, 646120,
                  tzinfo=timezone(timedelta(hours=2, minutes=30))),

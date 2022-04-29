@@ -1,9 +1,11 @@
 import hashlib
 
+
 #
 # postgres message data types as defined here:
 # https://www.postgresql.org/docs/current/protocol-message-types.html
 #
+
 
 class PgBaseDataType:
     pass
@@ -65,7 +67,7 @@ class String(bytes, PgBaseDataType):
         try:
             value = self.decode('utf-8')
         except UnicodeDecodeError:
-            value = super().__str__[1:] # remove the b prefix
+            value = super().__str__[1:]  # remove the b prefix
         return f'{value}'
 
     @classmethod
@@ -98,7 +100,7 @@ class PgMessageMetaClass(type):
     @staticmethod
     def _create_class(cls, name, bases, attrs, **kwargs):
         if '_type' not in attrs:
-            #allow _type to be inherited
+            # allow _type to be inherited
             for base_class in bases:
                 if hasattr(base_class, '_type'):
                     # don't use the _type here though, because we've
@@ -134,7 +136,7 @@ class PgMessageMetaClass(type):
             if attr.startswith('_'):
                 continue
             if not isinstance(value, PgBaseDataType) and \
-               not (isinstance(value, type) and \
+               not (isinstance(value, type) and
                     issubclass(value, PgBaseDataType)) and \
                not callable(value):
                 raise TypeError(
@@ -215,9 +217,9 @@ class PgMessage(metaclass=PgMessageMetaClass):
 
         msg = subclass._deserialize(
             msg,
-            start + 1 + 4, # one byte for type, 4 for length
-            msg_len - 4 # length consists of the length field itself
-                        # but not type
+            start + 1 + 4,  # one byte for type, 4 for length
+            msg_len - 4     # length consists of the length field
+                            # itself but not type
         )
 
         # return the deserialized message, as well as the number of
@@ -313,21 +315,21 @@ class AuthenticationOk(Authentication, side='backend'):
     auth = Int32(0)
 
     def __repr__(self):
-        return f'<AuthenticationOk>'
+        return '<AuthenticationOk>'
 
 
 class AuthenticationKerberosV5(Authentication, side='backend'):
     auth = Int32(2)
 
     def __repr__(self):
-        return f'<AuthenticationKerberosV5>'
+        return '<AuthenticationKerberosV5>'
 
 
 class AuthenticationCleartextPassword(Authentication, side='backend'):
     auth = Int32(3)
 
     def __repr__(self):
-        return f'<AuthenticationCleartextPassword>'
+        return '<AuthenticationCleartextPassword>'
 
 
 class AuthenticationMD5Password(Authentication, side='backend'):
@@ -337,7 +339,7 @@ class AuthenticationMD5Password(Authentication, side='backend'):
         self.salt = salt
 
     def __repr__(self):
-        salt = repr(self.salt)[2:-1] # string b prefix and quotes
+        salt = repr(self.salt)[2:-1]  # string b prefix and quotes
         return f'<AuthenticationMD5Password salt="{salt}">'
 
 
@@ -345,14 +347,14 @@ class AuthenticationSCMCredential(Authentication, side='backend'):
     auth = Int32(6)
 
     def __repr__(self):
-        return f'<AuthenticationSCMCredential>'
+        return '<AuthenticationSCMCredential>'
 
 
 class AuthenticationGSS(Authentication, side='backend'):
     auth = Int32(7)
 
     def __repr__(self):
-        return f'<AuthenticationGSS>'
+        return '<AuthenticationGSS>'
 
 
 class AuthenticationGSSContinue(Authentication, side='backend'):
@@ -362,8 +364,8 @@ class AuthenticationGSSContinue(Authentication, side='backend'):
         self.auth_data = auth_data
 
     def __repr__(self):
-        auth_data = repr(self.auth_data)[2:-1] # string b prefix and
-                                               # quotes
+        auth_data = repr(self.auth_data)[2:-1]  # string b prefix and
+                                                # quotes
         return f'<AuthenticationGSSContinue auth_data={auth_data}>'
 
 
@@ -371,7 +373,7 @@ class AuthenticationSSPI(Authentication, side='backend'):
     auth = Int32(9)
 
     def __repr__(self):
-        return f'<AuthenticationSSPI>'
+        return '<AuthenticationSSPI>'
 
 
 class AuthenticationSASL(Authentication, side='backend'):
@@ -381,8 +383,8 @@ class AuthenticationSASL(Authentication, side='backend'):
         self.auth_mechanism = auth_mechanism
 
     def __repr__(self):
-        auth_mech = repr(self.auth_mechanism)[2:-1] # string b prefix
-                                                    # and quotes
+        auth_mech = repr(self.auth_mechanism)[2:-1]  # string b prefix
+                                                     # and quotes
         return f'<AuthenticationSASL auth_mechanism={auth_mech}>'
 
 
@@ -393,7 +395,7 @@ class AuthenticationSASLContinue(Authentication, side='backend'):
         self.data = data
 
     def __repr__(self):
-        data = repr(self.data)[2:-1] # string b prefix and quotes
+        data = repr(self.data)[2:-1]  # string b prefix and quotes
         return f'<AuthenticationSASLContinue auth_mechanism={data}>'
 
 
@@ -404,7 +406,7 @@ class AuthenticationSASLFinal(Authentication, side='backend'):
         self.data = data
 
     def __repr__(self):
-        data = repr(self.data)[2:-1] # string b prefix and quotes
+        data = repr(self.data)[2:-1]  # string b prefix and quotes
         return f'<AuthenticationSASLFinal auth_mechanism={data}>'
 
 
@@ -522,7 +524,7 @@ class Close(PgMessage, side='frontend'):
         type = self.type.decode('ascii')
         try:
             name = self.name.decode('ascii')
-        except:
+        except UnicodeDecodeError:
             name = repr(self.name)[2:-1]
         return f'<Close type={type} name={name}>'
 
@@ -591,7 +593,7 @@ class Describe(PgMessage, side='frontend'):
         type = self.type.decode('ascii')
         try:
             name = self.name.decode('ascii')
-        except:
+        except UnicodeDecodeError:
             name = repr(self.name)[2:-1]
         return f'<Describe type={type} name={name}>'
 
@@ -617,7 +619,6 @@ class ErrorResponse(PgMessage, side='backend'):
 
     @classmethod
     def _deserialize(cls, msg, start, length):
-        consumed = 0
         pairs = []
         idx = start
         while True:
@@ -628,7 +629,7 @@ class ErrorResponse(PgMessage, side='backend'):
             code, n = Byte1.deserialize(msg, idx)
             if code == b'\0':
                 break
-            code = chr(code[0]) # convert e.g. b'C' to 'C'
+            code = chr(code[0])  # convert e.g. b'C' to 'C'
             idx += n
             value, n = String.deserialize(msg, idx)
             idx += n
@@ -685,6 +686,7 @@ class NoticeResponse(PgMessage, side='backend'):
 
     @classmethod
     def _deserialize(cls, msg, start, length):
+        obj = cls()
         idx = start
         while True:
             if idx >= len(msg):
@@ -694,7 +696,7 @@ class NoticeResponse(PgMessage, side='backend'):
             code, n = Byte1.deserialize(msg, start)
             if code == b'\0':
                 break
-            code = chr(code[0]) # convert e.g. b'C' to 'C'
+            code = chr(code[0])  # convert e.g. b'C' to 'C'
             idx += n
             value, n = String.deserialize(msg, start)
             obj.notices.append((code, value))
@@ -813,7 +815,6 @@ class PasswordMessage(PgMessage, side='frontend'):
                 .hexdigest()
                 .encode('ascii')
             )
-            #password = String(b'md5' + final_hash)
             password = b'md5' + final_hash
 
         self.password = password
@@ -904,13 +905,13 @@ class RowDescription(PgMessage, side='backend'):
 
 
 class SSLRequest(PgMessage, side='frontend'):
-    _type = None # SSLRequest message has no type field
+    _type = None  # SSLRequest message has no type field
     ssl_request_code = Int32(80877103)
 
 
 class StartupMessage(PgMessage, side='frontend'):
-    _type = None # startup message has no type field
-    version = Int32(0x0003_0000) # protocol version 3.0
+    _type = None  # startup message has no type field
+    version = Int32(0x0003_0000)  # protocol version 3.0
     # params = dynamic field
 
     def __init__(self, user, database):

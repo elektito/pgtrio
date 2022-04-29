@@ -2,7 +2,6 @@ import warnings
 import struct
 import socket
 import re
-import math
 import dateutil.parser
 import orjson
 from datetime import date, time, datetime, timedelta, timezone
@@ -846,9 +845,8 @@ def decode_inet_or_cidr(value):
             'Invalid address family code received: {family}')
 
     if bits > max_prefixlen:
-        ip_ver = sample_addr.version
         raise InterfaceError(
-            'Invalid IPv{ip_version} CIDR netmask received: /{bits}')
+            f'Invalid IPv{ip_version} CIDR netmask received: /{bits}')
 
     if len(address) != address_length:
         raise InterfaceError(

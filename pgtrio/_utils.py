@@ -1,5 +1,6 @@
 from enum import IntEnum
 
+
 class PgProtocolFormat(IntEnum):
     TEXT = 0
     BINARY = 1

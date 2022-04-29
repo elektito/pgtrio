@@ -5,7 +5,7 @@ from ipaddress import (
     ip_network,
 )
 from datetime import datetime, date, time, timedelta, timezone
-from pytest import fixture, raises, mark
+from pytest import raises
 from utils import postgres_socket_file, conn
 
 
@@ -132,6 +132,7 @@ async def test_int8(conn):
         (0,)
     ]
 
+
 async def test_int8_out_of_range_inline_value(conn):
     await conn.execute('create table foobar (foo int8)')
 
@@ -170,7 +171,7 @@ async def test_bytea(conn):
     assert results == [(b'\x00\x01\x02',),]
 
 
-async def test_bytea(conn):
+async def test_text(conn):
     await conn.execute('create table foobar (foo text)')
     await conn.execute("insert into foobar (foo) values ($1)",
                        'fooobaar')
