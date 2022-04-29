@@ -1,3 +1,4 @@
+import trio
 import pgtrio
 from ipaddress import (
     IPv4Address, IPv6Address, IPv4Network, IPv6Network, ip_address,
