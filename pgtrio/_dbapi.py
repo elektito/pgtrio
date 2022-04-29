@@ -182,6 +182,13 @@ class Connection:
             nursery.start_soon(self._load_pg_types)
 
             await self._closed.wait()
+
+            # attempt a graceful shutdown by sending a Terminate
+            # message, but we can't use self._send_msg because the
+            # send task is now canceled.
+            msg = _pgmsg.Terminate()
+            await self._stream.send_all(bytes(msg))
+
             nursery.cancel_scope.cancel()
 
     async def _run_send(self):

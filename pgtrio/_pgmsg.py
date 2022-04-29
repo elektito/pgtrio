@@ -936,3 +936,7 @@ class StartupMessage(PgMessage, side='frontend'):
 
 class Sync(PgMessage, side='frontend'):
     _type = b'S'
+
+
+class Terminate(PgMessage, side='frontend'):
+    _type = b'X'
