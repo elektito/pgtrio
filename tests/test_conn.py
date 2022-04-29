@@ -168,7 +168,7 @@ async def test_bytea(conn):
                        b'\x00\x01\x02')
     results = await conn.execute('select * from foobar')
     assert conn.rowcount == 1
-    assert results == [(b'\x00\x01\x02',),]
+    assert results == [(b'\x00\x01\x02',)]
 
 
 async def test_text(conn):
@@ -177,7 +177,7 @@ async def test_text(conn):
                        'fooobaar')
     results = await conn.execute('select * from foobar')
     assert conn.rowcount == 1
-    assert results == [('fooobaar',),]
+    assert results == [('fooobaar',)]
 
 
 async def test_json(conn):
