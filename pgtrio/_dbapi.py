@@ -86,6 +86,7 @@ class Connection:
         self._query_status = QueryStatus.INITIALIZING
         self._query_row_count = None
         self._query_results = []
+        self._query_lock = trio.Lock()
         self._query_parse_phase_started = False
         self._query_describe_stmt_phase_started = False
         self._query_bind_phase_started = False
@@ -99,16 +100,6 @@ class Connection:
         # these channels are used to communicate data to be sent to
         # the back-end to the _run_send task
         self._outgoing_send_chan, self._outgoing_recv_chan = \
-            trio.open_memory_channel(0)
-
-        # these channels are used to send queries from the execute
-        # method to the query processor
-        self._query_send_chan, self._query_recv_chan = \
-            trio.open_memory_channel(0)
-
-        # these channels are used to send query results from the query
-        # processor back to the execute method
-        self._results_send_chan, self._results_recv_chan = \
             trio.open_memory_channel(0)
 
         # these will be set by process_query method to a pair of
@@ -142,6 +133,9 @@ class Connection:
         self._codec_helper.register_codec(codec)
 
     async def execute(self, query, *params):
+        if self._closed.is_set():
+            raise ProgrammingError('Connection is closed.')
+
         if not self._pg_types_loaded.is_set():
             # the "if" is not technically necessary, but avoids an
             # extra trio checkpoint.
@@ -150,20 +144,26 @@ class Connection:
         return await self._execute(query, *params)
 
     async def _execute(self, query, *params,
-                       dont_decode_values=False,
-                       protocol_format=None):
-        if self._closed.is_set():
-            raise ProgrammingError('Connection is closed.')
-
+                        dont_decode_values=False,
+                        protocol_format=None):
         if protocol_format is None:
             protocol_format = self.protocol_format
+
         q = Query(query, *params,
                   dont_decode_values=dont_decode_values,
                   protocol_format=protocol_format)
-        await self._query_send_chan.send(q)
-        results = await self._results_recv_chan.receive()
-        if isinstance(results, Exception):
-            raise results
+
+        async with self._query_lock:
+            self._is_ready = False
+            try:
+                results = await self._process_query(q)
+            finally:
+                try:
+                    await self._flush_extra_messages_after_query()
+                except:
+                    self.close()
+                    raise
+
         return results
 
     def close(self):
@@ -175,7 +175,6 @@ class Connection:
         async with trio.open_nursery() as nursery, self._stream:
             nursery.start_soon(self._run_recv)
             nursery.start_soon(self._run_send)
-            nursery.start_soon(self._run_query_processor)
 
             msg = _pgmsg.StartupMessage(self.username, self.database)
             await self._send_msg(msg)
@@ -212,35 +211,6 @@ class Connection:
                 start += length
 
             buf = buf[start:]
-
-    async def _run_query_processor(self):
-        async for query in self._query_recv_chan:
-            self._cur_msg_send_chan, self._cur_msg_recv_chan = \
-                trio.open_memory_channel(0)
-
-            self._is_ready = False
-
-            try:
-                results = await self._process_query(query)
-            except Error as e:
-                results = e
-            except (OverflowError, ValueError, TypeError) as e:
-                # allow certain BaseException errors to also propagate
-                results = e
-            except:
-                results = None
-                raise
-            finally:
-                try:
-                    await self._flush_extra_messages_after_query()
-                except:
-                    self.close()
-                    raise
-
-                self._cur_msg_send_chan = None
-                self._cur_msg_recv_chan = None
-
-            await self._results_send_chan.send(results)
 
     async def _flush_extra_messages_after_query(self):
         # in case we fail processing a query midways (maybe due to an
@@ -425,13 +395,12 @@ class Connection:
                     self._query_row_count = None
                 break
             elif isinstance(msg, _pgmsg.ErrorResponse):
-                results = self._get_exc_from_msg(
+                raise self._get_exc_from_msg(
                     msg,
                     desc_prefix=(
                         f'Error processing query: {query.text}\n   '
                     ),
                 )
-                break
             elif isinstance(msg, _pgmsg.EmptyQueryResponse):
                 self._query_row_count = 0
                 return []
@@ -445,25 +414,21 @@ class Connection:
 
         ## close phase
 
-        # if there was an error during execute, we shouldn't close
-        if not isinstance(results, Exception):
-            msg = _pgmsg.Close(b'P', '')
-            await self._send_msg(msg, _pgmsg.Sync())
+        msg = _pgmsg.Close(b'P', '')
+        await self._send_msg(msg, _pgmsg.Sync())
 
-            self._query_close_phase_started = True
+        self._query_close_phase_started = True
 
-            msg = await self._get_msg(_pgmsg.CloseComplete,
-                                      _pgmsg.ErrorResponse)
-            if isinstance(msg, _pgmsg.ErrorResponse):
-                raise self._get_exc_from_msg(
-                    msg,
-                    desc_prefix=(
-                        f'Error parsing query: {query.text}\n   '
-                    ),
-                )
-            assert isinstance(msg, _pgmsg.CloseComplete)
-        else:
-            await self._send_msg(_pgmsg.Sync())
+        msg = await self._get_msg(_pgmsg.CloseComplete,
+                                  _pgmsg.ErrorResponse)
+        if isinstance(msg, _pgmsg.ErrorResponse):
+            raise self._get_exc_from_msg(
+                msg,
+                desc_prefix=(
+                    f'Error parsing query: {query.text}\n   '
+                ),
+            )
+        assert isinstance(msg, _pgmsg.CloseComplete)
 
         msg = await self._get_msg(_pgmsg.ReadyForQuery,
                                   _pgmsg.ErrorResponse)

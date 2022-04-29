@@ -1,3 +1,4 @@
+import pgtrio
 from ipaddress import (
     IPv4Address, IPv6Address, IPv4Network, IPv6Network, ip_address,
     ip_network,
@@ -5,7 +6,6 @@ from ipaddress import (
 from datetime import datetime, date, time, timedelta, timezone
 from pytest import fixture, raises, mark
 from utils import postgres_socket_file, conn
-import pgtrio
 
 
 async def test_null_char_in_query(conn):
@@ -453,3 +453,29 @@ async def test_wrong_param_type(conn):
         await conn.execute(
             'insert into foobar (foo, bar, eggs) values ($1, $2, $3)',
             101, 'foobar', object())
+
+
+async def test_concurrent_queries(conn):
+    await conn.execute(
+        'create table foobar (foo int unique, bar int not null)')
+    await conn.execute(
+            'insert into foobar (foo, bar) values ($1, $2)',
+            101, 201)
+
+    async def successful_query():
+        results = await conn.execute('select * from foobar')
+        assert results == [(101, 201)]
+
+    async def invalid_query():
+        with raises(pgtrio.DatabaseError):
+            await conn.execute('foo bar')
+
+    async def failing_query():
+        with raises(pgtrio.DatabaseError):
+            # violate unique and not-null constraints
+            await conn.execute('insert into foobar (foo) values (101)')
+
+    async with trio.open_nursery() as nursery:
+        nursery.start_soon(invalid_query)
+        nursery.start_soon(successful_query)
+        nursery.start_soon(failing_query)
