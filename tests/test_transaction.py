@@ -2,6 +2,7 @@ import trio
 from pytest import raises, mark
 from pgtrio import PgIsolationLevel, PgReadWriteMode
 from utils import postgres_socket_file, conn
+from pgtrio._exceptions import InterfaceError
 
 
 isolation_levels = [
@@ -174,3 +175,10 @@ async def test_multiple_tasks(conn):
     results = await conn.execute('select * from foobar')
     results = [i[0] for i in results]
     assert set(results) == set(range(100))
+
+
+async def test_mix_manual(conn):
+    await conn.execute('begin')
+    with raises(InterfaceError):
+        async with conn.transaction():
+            pass

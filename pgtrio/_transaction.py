@@ -1,6 +1,7 @@
 import trio
 from contextvars import ContextVar
 from collections import defaultdict
+from ._exceptions import InterfaceError
 
 
 transaction_stack_per_conn = ContextVar('transaction_stack_per_conn',
@@ -51,6 +52,10 @@ class Transaction:
             # we're inside a transaction block in the same task.
             await self._start_savepoint()
         else:
+            if self.conn.in_transaction:
+                raise InterfaceError(
+                    'Cannot start a transaction block inside a '
+                    'manually started transaction.')
             # no transaction block in the current task, synchronize
             # using a lock (in case concurrent tasks attempt doing
             # this) and start and new transaction.
