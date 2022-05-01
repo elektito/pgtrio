@@ -1,3 +1,4 @@
+import trio
 from pytest import raises, mark
 from pgtrio import PgIsolationLevel, PgReadWriteMode
 from utils import postgres_socket_file, conn
@@ -129,3 +130,47 @@ async def test_savepoint_commit(conn):
 
     results = await conn.execute('select * from foobar')
     assert results == [(10,), (20,), (30,), (40,)]
+
+
+async def test_multiple_tasks(conn):
+    await conn.execute('create table foobar (foo int)')
+
+    async def task(i):
+        async with conn.transaction():
+            await conn.execute(
+                'insert into foobar (foo) values ($1)', i + 0)
+            await conn.execute(
+                'insert into foobar (foo) values ($1)', i + 1)
+            await conn.execute(
+                'insert into foobar (foo) values ($1)', i + 2)
+
+            async with conn.transaction():
+                await conn.execute(
+                    'insert into foobar (foo) values ($1)', i + 3)
+                async with conn.transaction():
+                    await conn.execute(
+                        'insert into foobar (foo) values ($1)', i + 4)
+                    await conn.execute(
+                        'insert into foobar (foo) values ($1)', i + 5)
+                    async with conn.transaction() as sp:
+                        await conn.execute(
+                            'insert into foobar (foo) values ($1)',
+                            1000)
+                        await sp.rollback()
+                await conn.execute(
+                    'insert into foobar (foo) values ($1)', i + 6)
+
+            await conn.execute(
+                'insert into foobar (foo) values ($1)', i + 7)
+            await conn.execute(
+                'insert into foobar (foo) values ($1)', i + 8)
+            await conn.execute(
+                'insert into foobar (foo) values ($1)', i + 9)
+
+    async with trio.open_nursery() as nursery:
+        for i in range(10):
+            nursery.start_soon(task, i * 10)
+
+    results = await conn.execute('select * from foobar')
+    results = [i[0] for i in results]
+    assert set(results) == set(range(100))

@@ -96,6 +96,8 @@ class Connection:
         self._query_execute_phase_started = False
         self._query_close_phase_started = False
 
+        self._transaction_lock = trio.Lock()
+
         self._is_ready = False
         self._is_ready_cv = trio.Condition()
 

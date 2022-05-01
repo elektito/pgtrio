@@ -1,4 +1,10 @@
 import trio
+from contextvars import ContextVar
+from collections import defaultdict
+
+
+transaction_stack_per_conn = ContextVar('transaction_stack_per_conn',
+                                        default=defaultdict(list))
 
 
 class TransactionExit(BaseException):
@@ -39,24 +45,42 @@ class Transaction:
             await self.conn.execute(f'rollback to {self._savepoint_id}')
 
     async def __aenter__(self):
-        if self.conn.in_transaction:
-            spid = self.conn._get_unique_id('savepoint')
-            self._savepoint_id = f'pgtrio_sp_{spid}'
-            query = f'savepoint {self._savepoint_id}'
-        else:
-            query = 'begin'
-            if self.isolation_level:
-                query += f' isolation level {self.isolation_level}'
-            if self.read_write_mode:
-                query += f' {self.read_write_mode}'
-            if self.deferrable:
-                query += f' deferrable'
+        stack = transaction_stack_per_conn.get()[id(self.conn)]
 
-        await self.conn.execute(query)
+        if stack:
+            # we're inside a transaction block in the same task.
+            await self._start_savepoint()
+        else:
+            # no transaction block in the current task, synchronize
+            # using a lock (in case concurrent tasks attempt doing
+            # this) and start and new transaction.
+            await self.conn._transaction_lock.acquire()
+            await self._start_transaction()
+
+        stack.append(self)
 
         return self
 
+    async def _start_transaction(self):
+        query = 'begin'
+        if self.isolation_level:
+            query += f' isolation level {self.isolation_level}'
+        if self.read_write_mode:
+            query += f' {self.read_write_mode}'
+        if self.deferrable:
+            query += f' deferrable'
+
+        await self.conn.execute(query)
+
+    async def _start_savepoint(self):
+        self._savepoint_id = self.conn._get_unique_id('savepoint')
+        query = f'savepoint {self._savepoint_id}'
+        await self.conn.execute(query)
+
     async def __aexit__(self, extype, ex, tb):
+        stack = transaction_stack_per_conn.get()[id(self.conn)]
+        stack.pop()
+
         if extype and issubclass(extype, TransactionExit):
             # return True to signify we've handled the exception
             return True
@@ -66,6 +90,9 @@ class Transaction:
                 await self._commit()
             else:
                 await self._rollback()
+
+            if not self._savepoint_id:
+                self.conn._transaction_lock.release()
 
         # propagate exception (if any)
         return False
