@@ -83,10 +83,9 @@ class Connection:
         self._outgoing_send_chan, self._outgoing_recv_chan = \
             trio.open_memory_channel(0)
 
-        # these will be set by process_query method to a pair of
-        # send/receive channels and used to get messages from the
-        # _run_recv task
-        self._cur_msg_send_chan, self._cur_msg_recv_chan = None, None
+        # these channels are used to communicate incoming messages to
+        # whoever is interested (used by _get_msg)
+        self._incoming_send_chan, self._incoming_recv_chan = None, None
 
         # this is set when we receive AuthenticationOk from postgres
         self._auth_ok = trio.Event()
@@ -233,8 +232,8 @@ class Connection:
                     break
                 logger.debug('Received PG message: {msg}')
 
-                if self._cur_msg_send_chan:
-                    await self._cur_msg_send_chan.send(msg)
+                if self._incoming_send_chan:
+                    await self._incoming_send_chan.send(msg)
                 else:
                     await self._handle_unsolicited_msg(msg)
 
@@ -273,9 +272,6 @@ class Connection:
     async def _process_simple_query(self, query,
                                     dont_decode_values,
                                     protocol_format):
-        self._cur_msg_send_chan, self._cur_msg_recv_chan = \
-            trio.open_memory_channel(0)
-
         msg = _pgmsg.Query(query)
         await self._send_msg(msg)
 
@@ -320,7 +316,7 @@ class Connection:
         return results
 
     async def _get_msg(self, *msg_types):
-        async for msg in self._cur_msg_recv_chan:
+        async for msg in self._incoming_recv_chan:
             if type(msg) in msg_types:
                 return msg
             else:
@@ -432,6 +428,10 @@ class Connection:
         self._is_ready = True
         async with self._is_ready_cv:
             self._is_ready_cv.notify_all()
+
+        if not self._incoming_send_chan:
+            self._incoming_send_chan, self._incoming_recv_chan = \
+                trio.open_memory_channel(0)
 
     async def _handle_msg_row_description(self, msg):
         self._row_desc = msg.fields
