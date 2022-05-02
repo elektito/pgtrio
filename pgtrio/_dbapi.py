@@ -103,6 +103,8 @@ class Connection:
         self._is_ready = False
         self._is_ready_cv = trio.Condition()
 
+        self._run_send_finished = False
+
         # these channels are used to communicate data to be sent to
         # the back-end to the _run_send task
         self._outgoing_send_chan, self._outgoing_recv_chan = \
@@ -212,21 +214,22 @@ class Connection:
             # there's no conflict with other tasks
             nursery.cancel_scope.cancel()
 
+            # make sure _send_run is finished so we won't get an error
+            # by concurrently writing to the stream
+            await _self._run_send_finished.wait()
+
             # attempt a graceful shutdown by sending a Terminate
             # message, but we can't use self._send_msg because the
             # send task is now canceled.
             msg = _pgmsg.Terminate()
-            try:
-                await self._stream.send_all(bytes(msg))
-            except trio.ClosedResourceError:
-                pass
+            await self._stream.send_all(bytes(msg))
 
     async def _run_send(self):
         try:
             async for msg in self._outgoing_recv_chan:
                 await self._stream.send_all(bytes(msg))
-        except trio.ClosedResourceError:
-            pass
+        finally:
+            self._run_send_finished = True
 
     async def _run_recv(self):
         buf = b''
