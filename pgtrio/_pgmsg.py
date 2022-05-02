@@ -498,7 +498,7 @@ class Bind(PgMessage, side='frontend'):
     def __repr__(self):
         params = ''
         if self.params:
-            params = f' {self.params!r}'
+            params = f' params={self.params!r}'
         pcodes = ''
         if self.param_format_codes:
             pcodes = f' param_fmt={[int(c) for c in self.param_format_codes]!r}'
