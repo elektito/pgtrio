@@ -512,6 +512,9 @@ class Close(PgMessage, side='frontend'):
     def __init__(self, stmt_or_portal, name):
         assert stmt_or_portal in (b'S', b'P')
         self.type = stmt_or_portal
+
+        if isinstance(name, str):
+            name = name.encode('utf-8')
         self.name = name
 
     def __bytes__(self):
@@ -581,6 +584,9 @@ class Describe(PgMessage, side='frontend'):
     def __init__(self, stmt_or_portal, name):
         assert stmt_or_portal in (b'S', b'P')
         self.type = stmt_or_portal
+
+        if isinstance(name, str):
+            name = name.encode('utf-8')
         self.name = name
 
     def __bytes__(self):
@@ -643,15 +649,21 @@ class Execute(PgMessage, side='frontend'):
     portal_name = String
     max_rows = Int32
 
-    def __init__(self, portal_name, max_rows=0):
+    def __init__(self, portal_name, max_rows=None):
         self.portal_name = portal_name
-        self.max_rows = max_rows
+        self.max_rows = max_rows or 0
 
     def __bytes__(self):
         portal_name = bytes(String(self.portal_name))
         max_rows = bytes(Int32(self.max_rows))
         length = bytes(Int32(4 + len(portal_name) + len(max_rows)))
         return b'E' + length + portal_name + max_rows
+
+    def __repr__(self):
+        max_rows = ''
+        if self.max_rows:
+            max_rows = f' max_rows={self.max_rows}'
+        return f'<Execute portal={self.portal_name}{max_rows}>'
 
 
 class Flush(PgMessage, side='frontend'):
@@ -940,6 +952,12 @@ class StartupMessage(PgMessage, side='frontend'):
 class Sync(PgMessage, side='frontend'):
     _type = b'S'
 
+    def __repr__(self):
+        return '<Sync>'
+
 
 class Terminate(PgMessage, side='frontend'):
     _type = b'X'
+
+    def __repr__(self):
+        return '<Terminate>'

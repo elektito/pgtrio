@@ -101,3 +101,10 @@ class Transaction:
 
         # propagate exception (if any)
         return False
+
+    @staticmethod
+    def get_cur_transaction(conn):
+        stack = transaction_stack_per_conn.get()[id(conn)]
+        if not stack:
+            return None
+        return stack[-1]

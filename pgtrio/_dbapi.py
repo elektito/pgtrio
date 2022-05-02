@@ -9,6 +9,7 @@ from . import _pgmsg
 from ._codecs import CodecHelper
 from ._utils import PgProtocolFormat, get_exc_from_msg
 from ._transaction import Transaction
+from ._prepared_stmt import PreparedStatement
 from ._exceptions import (
     InternalError, DatabaseError, OperationalError, ProgrammingError,
 )
@@ -182,10 +183,16 @@ class Connection:
     def transaction(self, *args, **kwargs):
         return Transaction(self, *args, **kwargs)
 
+    @wraps(PreparedStatement)
+    def prepare(self, *args, **kwargs):
+        return PreparedStatement(self, *args, **kwargs)
+
     async def _run(self):
         await self._connect()
 
         async with trio.open_nursery() as nursery, self._stream:
+            self._nursery = nursery
+
             nursery.start_soon(self._run_recv)
             nursery.start_soon(self._run_send)
 
@@ -196,22 +203,34 @@ class Connection:
 
             await self._closed.wait()
 
+            # Doing this before sending Terminate message makes sure
+            # there's no conflict with other tasks
+            nursery.cancel_scope.cancel()
+
             # attempt a graceful shutdown by sending a Terminate
             # message, but we can't use self._send_msg because the
             # send task is now canceled.
             msg = _pgmsg.Terminate()
-            await self._stream.send_all(bytes(msg))
-
-            nursery.cancel_scope.cancel()
+            try:
+                await self._stream.send_all(bytes(msg))
+            except trio.ClosedResourceError:
+                pass
 
     async def _run_send(self):
-        async for msg in self._outgoing_recv_chan:
-            await self._stream.send_all(bytes(msg))
+        try:
+            async for msg in self._outgoing_recv_chan:
+                await self._stream.send_all(bytes(msg))
+        except trio.ClosedResourceError:
+            pass
 
     async def _run_recv(self):
         buf = b''
         while True:
-            data = await self._stream.receive_some(BUFFER_SIZE)
+            try:
+                data = await self._stream.receive_some(BUFFER_SIZE)
+            except trio.ClosedResourceError:
+                break
+
             if data == b'':
                 raise OperationalError('Database connection broken')
             buf += data
@@ -231,6 +250,22 @@ class Connection:
                 start += length
 
             buf = buf[start:]
+
+    def _close_stmt(self, stmt_name):
+        # this function is called by the __del__ method of a
+        # PreparedStatement to deallocate the statement in the
+        # background. The function itself cannot execute this since
+        # it's not async.
+
+        async def close_stmt():
+            if not self._closed.is_set():
+                try:
+                    await self.execute(f'deallocate {stmt_name}')
+                except trio.ClosedResourceError:
+                    pass
+
+        if not self._closed.is_set():
+            self._nursery.start_soon(close_stmt)
 
     async def _flush_extra_messages_after_query(self):
         # in case we fail processing a query midways (maybe due to an
@@ -629,7 +664,7 @@ class Connection:
     def _get_unique_id(self, id_type):
         self._id_counters[id_type] += 1
         idx = self._id_counters[id_type]
-        return f'{id_type}_{idx}'
+        return f'_pgtrio_{id_type}_{idx}'
 
 
 @asynccontextmanager
