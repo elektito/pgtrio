@@ -287,7 +287,6 @@ class PreparedStatement:
             )
 
         self._portal_closed = True
-        self._execute_started = False
 
     async def forward(self, n):
         if self.conn._closed.is_set():
