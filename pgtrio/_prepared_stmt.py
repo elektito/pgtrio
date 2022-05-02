@@ -32,6 +32,7 @@ class PreparedStatement:
         self._param_oids = None
         self._row_desc = None
         self._stmt_name = None
+        self._query_row_count = None
 
     def __await__(self):
         return self._init().__await__()
@@ -110,6 +111,10 @@ class PreparedStatement:
                 type_modifier, format_code
             in self._row_desc
         ]
+
+    @property
+    def rowcount(self):
+        return self._query_row_count
 
     async def cursor(self, *params, **kwargs):
         await self.execute(limit=NO_EXECUTE)
@@ -222,7 +227,13 @@ class PreparedStatement:
                     break
             elif isinstance(msg, _pgmsg.EmptyQueryResponse):
                 should_close = True
+                break
             elif isinstance(msg, _pgmsg.CommandComplete):
+                if msg.cmd_tag.startswith(b'SELECT'):
+                    _, rows = msg.cmd_tag.split(b' ')
+                    self._query_row_count = int(rows.decode('ascii'))
+                else:
+                    self._query_row_count = None
                 should_close = True
                 break
             elif isinstance(msg, _pgmsg.PortalSuspended):
@@ -290,6 +301,11 @@ class PreparedStatement:
                     ),
                 )
             elif isinstance(msg, _pgmsg.CommandComplete):
+                if msg.cmd_tag.startswith(b'SELECT'):
+                    _, rows = msg.cmd_tag.split(b' ')
+                    self._query_row_count = int(rows.decode('ascii'))
+                else:
+                    self._query_row_count = None
                 should_close = True
                 break
             elif isinstance(msg, _pgmsg.PortalSuspended):
@@ -366,9 +382,8 @@ class PreparedStatement:
         return f'<PreparedStatement name={self._stmt_name} query="{self.query}">'
 
     def __del__(self):
-        # can't perform async operation here, so we'll ask the
-        # connection to close the statement
-        self.conn._close_stmt(self._stmt_name)
+        if hasattr(self, '_stmt_name') and self._stmt_name:
+            self.conn._close_stmt(self._stmt_name)
 
     @property
     def finished(self):

@@ -17,7 +17,7 @@ async def test_null_char_in_query(conn):
 async def test_empty_query(conn):
     results = await conn.execute('')
     assert results == []
-    assert conn.rowcount == 0
+    assert conn.rowcount == None
 
 
 async def test_null(conn):

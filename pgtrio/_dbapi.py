@@ -126,11 +126,9 @@ class Connection:
             # extra trio checkpoint.
             await self._pg_types_loaded.wait()
 
-        if params:
-            stmt = await self.prepare(query)
-            results = await stmt.execute(*params)
-        else:
-            results = await self._execute_simple(query)
+        stmt = await self.prepare(query)
+        results = await stmt.execute(*params)
+        self._query_row_count = stmt.rowcount
 
         return results
 
@@ -271,43 +269,6 @@ class Connection:
                 # can't salvage connection at this point
                 self.close()
                 raise
-
-    async def _flush_extra_messages_after_query(self):
-        # in case we fail processing a query midways (maybe due to an
-        # unexpected error), this routine ensures that we get to the
-        # ready state again; if this function raises an exception, we
-        # can't salvage the connection anymore and it must be closed.
-
-        if self._is_ready:
-            return
-
-        logger.debug(
-            'Something bad happened during query execution. Continuing '
-            'to consume and discard messages until we hit '
-            'ReadyForQuery.')
-
-        if not self._query_close_phase_started:
-            msg = _pgmsg.Close(b'P', b'')
-            await self._send_msg(msg, _pgmsg.Sync())
-
-        msg_types_to_discard = [
-            _pgmsg.ParseComplete,
-            _pgmsg.EmptyQueryResponse,
-            _pgmsg.ErrorResponse,
-            _pgmsg.BindComplete,
-            _pgmsg.RowDescription,
-            _pgmsg.NoData,
-            _pgmsg.CommandComplete,
-            _pgmsg.DataRow,
-            _pgmsg.ErrorResponse,
-            _pgmsg.PortalSuspended,
-            _pgmsg.CloseComplete,
-            _pgmsg.ReadyForQuery,
-        ]
-        while not self._is_ready:
-            msg = await self._get_msg(*msg_types_to_discard)
-            if isinstance(msg, _pgmsg.ReadyForQuery):
-                await self._handle_msg_ready_for_query(msg)
 
     async def _process_simple_query(self, query,
                                     dont_decode_values,
