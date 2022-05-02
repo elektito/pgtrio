@@ -7,7 +7,7 @@ from functools import wraps
 from collections import defaultdict
 from . import _pgmsg
 from ._codecs import CodecHelper
-from ._utils import PgProtocolFormat
+from ._utils import PgProtocolFormat, get_exc_from_msg
 from ._transaction import Transaction
 from ._exceptions import (
     InternalError, DatabaseError, OperationalError, ProgrammingError,
@@ -290,7 +290,7 @@ class Connection:
         msg = await self._get_msg(_pgmsg.ParseComplete,
                                   _pgmsg.ErrorResponse)
         if isinstance(msg, _pgmsg.ErrorResponse):
-            raise self._get_exc_from_msg(
+            raise get_exc_from_msg(
                 msg,
                 desc_prefix=(
                     f'Error parsing query: {query.text}\n   '
@@ -352,7 +352,7 @@ class Connection:
         msg = await self._get_msg(_pgmsg.BindComplete,
                                   _pgmsg.ErrorResponse)
         if isinstance(msg, _pgmsg.ErrorResponse):
-            raise self._get_exc_from_msg(
+            raise get_exc_from_msg(
                 msg,
                 desc_prefix=(
                     f'Error binding query: {query.text}\n   '
@@ -411,7 +411,7 @@ class Connection:
                     self._query_row_count = None
                 break
             elif isinstance(msg, _pgmsg.ErrorResponse):
-                raise self._get_exc_from_msg(
+                raise get_exc_from_msg(
                     msg,
                     desc_prefix=(
                         f'Error processing query: {query.text}\n   '
@@ -438,7 +438,7 @@ class Connection:
         msg = await self._get_msg(_pgmsg.CloseComplete,
                                   _pgmsg.ErrorResponse)
         if isinstance(msg, _pgmsg.ErrorResponse):
-            raise self._get_exc_from_msg(
+            raise get_exc_from_msg(
                 msg,
                 desc_prefix=(
                     f'Error parsing query: {query.text}\n   '
@@ -449,7 +449,7 @@ class Connection:
         msg = await self._get_msg(_pgmsg.ReadyForQuery,
                                   _pgmsg.ErrorResponse)
         if isinstance(msg, _pgmsg.ErrorResponse):
-            raise self._get_exc_from_msg(
+            raise get_exc_from_msg(
                 msg,
                 desc_prefix=(
                     f'Error parsing query: {query.text}\n   '
@@ -511,25 +511,7 @@ class Connection:
             return
 
     async def _handle_error(self, msg):
-        raise self._get_exc_from_msg(msg)
-
-    def _get_exc_from_msg(self, msg, desc_prefix='', desc_suffix=''):
-        fields = dict(msg.pairs)
-
-        error_msg = fields.get('M')
-        if error_msg is not None:
-            error_msg = str(error_msg)
-
-        severity = fields.get('S')
-        if severity is not None:
-            severity = str(severity)
-
-        error_msg = desc_prefix + error_msg + desc_suffix
-
-        return DatabaseError(
-            error_msg=error_msg,
-            severity=severity,
-        )
+        raise get_exc_from_msg(msg)
 
     async def _handle_notice(self, msg):
         fields = dict(msg.pairs)
