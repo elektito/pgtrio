@@ -17,6 +17,13 @@ class PreparedStatement:
         self.conn = conn
         self.query = query
 
+        # even though the null character is valid UTF-8, we can't use
+        # it in queries, because at the protocol level, the queries
+        # are sent as zero-terminated strings.
+        if '\x00' in self.query:
+            raise ProgrammingError(
+                'NULL character is not valid in PostgreSQL queries.')
+
         self._execute_started = False
         self._portal_closed = False
 

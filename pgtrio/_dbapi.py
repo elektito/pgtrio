@@ -33,33 +33,6 @@ class QueryStatus(Enum):
                         # transaction
 
 
-class Query:
-    def __init__(self, text, *params,
-                 dont_decode_values=False,
-                 protocol_format=None):
-        self.text = text
-        self.params = params
-        self.dont_decode_values = dont_decode_values
-        self.protocol_format = protocol_format
-
-        # even though the null character is valid UTF-8, we can't use
-        # it in queries, because at the protocol level, the queries
-        # are sent as zero-terminated strings.
-        if '\x00' in self.text:
-            raise ProgrammingError(
-                'NULL character is not valid in PostgreSQL queries.')
-
-    def __repr__(self):
-        extra = []
-        if self.dont_decode_values:
-            extra.append('no_decode')
-        if self.protocol_format is not None:
-            extra.append(self.protocol_format.name.lower())
-        if extra:
-            extra = ' ' + ' '.join(extra)
-        return f'<Query text="{self.text}"{extra}>'
-
-
 class Connection:
     def __init__(self, database, *,
                  unix_socket_path=None,
@@ -153,27 +126,39 @@ class Connection:
             # extra trio checkpoint.
             await self._pg_types_loaded.wait()
 
-        return await self._execute(query, *params)
+        if params:
+            stmt = await self.prepare(query)
+            results = await stmt.execute(*params)
+        else:
+            results = await self._execute_simple(query)
 
-    async def _execute(self, query, *params,
-                       dont_decode_values=False,
-                       protocol_format=None):
+        return results
+
+    async def _execute_simple(self, query,
+                              dont_decode_values=False,
+                              protocol_format=None):
+        # even though the null character is valid UTF-8, we can't use
+        # it in queries, because at the protocol level, the queries
+        # are sent as zero-terminated strings.
+        if '\x00' in query:
+            raise ProgrammingError(
+                'NULL character is not valid in PostgreSQL queries.')
+
+        async with self._is_ready_cv:
+            while not self._is_ready:
+                await self._is_ready_cv.wait()
+
         if protocol_format is None:
             protocol_format = self.protocol_format
 
-        q = Query(query, *params,
-                  dont_decode_values=dont_decode_values,
-                  protocol_format=protocol_format)
-
         async with self._query_lock:
             try:
-                results = await self._process_query(q)
+                results = await self._process_simple_query(
+                    query,
+                    dont_decode_values=dont_decode_values,
+                    protocol_format=protocol_format)
             finally:
-                try:
-                    await self._flush_extra_messages_after_query()
-                except:
-                    self.close()
-                    raise
+                await self._wait_for_ready()
 
         return results
 
@@ -276,6 +261,17 @@ class Connection:
            not self._nursery.cancel_scope.cancelled_caught:
             self._nursery.start_soon(close_stmt)
 
+    async def _wait_for_ready(self):
+        if not self._is_ready:
+            try:
+                msg = await self._get_msg(_pgmsg.ReadyForQuery)
+                await self._handle_msg_ready_for_query(msg)
+                self._is_ready = True
+            except:
+                # can't salvage connection at this point
+                self.close()
+                raise
+
     async def _flush_extra_messages_after_query(self):
         # in case we fail processing a query midways (maybe due to an
         # unexpected error), this routine ensures that we get to the
@@ -313,144 +309,43 @@ class Connection:
             if isinstance(msg, _pgmsg.ReadyForQuery):
                 await self._handle_msg_ready_for_query(msg)
 
-    async def _process_query(self, query):
+    async def _process_simple_query(self, query,
+                                    dont_decode_values,
+                                    protocol_format):
         self._cur_msg_send_chan, self._cur_msg_recv_chan = \
             trio.open_memory_channel(0)
 
-        self._query_parse_phase_started = False
-        self._query_describe_stmt_phase_started = False
-        self._query_bind_phase_started = False
-        self._query_describe_portal_phase_started = False
-        self._query_execute_phase_started = False
-        self._query_close_phase_started = False
-
-        ## parse phase
-
-        msg = _pgmsg.Parse('', query.text)
-        await self._send_msg(msg, _pgmsg.Flush())
-
-        # sent messages, so no other query allowed until we have a
-        # ReadyForQuery
-        self._is_ready = False
-
-        self._query_parse_phase_started = True
-
-        msg = await self._get_msg(_pgmsg.ParseComplete,
-                                  _pgmsg.ErrorResponse)
-        if isinstance(msg, _pgmsg.ErrorResponse):
-            raise get_exc_from_msg(
-                msg,
-                desc_prefix=(
-                    f'Error parsing query: {query.text}\n   '
-                ),
-            )
-        assert isinstance(msg, _pgmsg.ParseComplete)
-
-        ## describe statement phase
-
-        msg = _pgmsg.Describe(b'S', b'')
-        await self._send_msg(msg, _pgmsg.Flush())
-
-        self._query_describe_stmt_phase_started = True
-
-        while msg := await self._get_msg(_pgmsg.RowDescription,
-                                         _pgmsg.ParameterDescription,
-                                         _pgmsg.NoData,
-                                         _pgmsg.ErrorResponse):
-            if isinstance(msg, _pgmsg.ErrorResponse):
-                # DESCRIBE command _can_ return an error, but only if the
-                # portal/prepared statement specified does not exist. In
-                # our case, this should never happen.
-                raise InternalError(
-                    f'DESCRIBE command returned an error: {msg}')
-            elif isinstance(msg, _pgmsg.RowDescription):
-                # ignore; we'll get the full row description after bind
-                break
-            elif isinstance(msg, _pgmsg.ParameterDescription):
-                param_oids = msg.param_oids
-            else:
-                # NoData is sent when the query will return no rows
-                assert isinstance(msg, _pgmsg.NoData)
-                break
-
-        # create parameter list
-
-        if query.protocol_format is not None:
-            protocol_format = query.protocol_format
-        else:
-            protocol_format = self.protocol_format
-
-        params = []
-        for param, param_oid in zip(query.params, param_oids):
-            param_value = self._codec_helper.encode_value(
-                param, param_oid,
-                protocol_format=protocol_format)
-            params.append(param_value)
-
-        ## bind phase
-
-        msg = _pgmsg.Bind('', '',
-                          params=params,
-                          param_format_codes=[protocol_format],
-                          result_format_codes=[protocol_format])
-        await self._send_msg(msg, _pgmsg.Flush())
-
-        self._query_bind_phase_started = True
-
-        msg = await self._get_msg(_pgmsg.BindComplete,
-                                  _pgmsg.ErrorResponse)
-        if isinstance(msg, _pgmsg.ErrorResponse):
-            raise get_exc_from_msg(
-                msg,
-                desc_prefix=(
-                    f'Error binding query: {query.text}\n   '
-                ),
-            )
-        assert isinstance(msg, _pgmsg.BindComplete)
-
-        ## describe portal phase
-
-        msg = _pgmsg.Describe(b'P', b'')
-        await self._send_msg(msg, _pgmsg.Flush())
-
-        self._query_describe_portal_phase_started = True
-
-        msg = await self._get_msg(_pgmsg.RowDescription,
-                                  _pgmsg.NoData,
-                                  _pgmsg.ErrorResponse)
-        if isinstance(msg, _pgmsg.ErrorResponse):
-            # DESCRIBE command _can_ return an error, but only if the
-            # portal/prepared statement specified does not exist. In
-            # our case, this should never happen.
-            raise InternalError(
-                f'DESCRIBE command returned an error: {msg}')
-        elif isinstance(msg, _pgmsg.RowDescription):
-            row_desc = msg.fields
-        else:
-            # NoData is sent when the query will return no rows
-            assert isinstance(msg, _pgmsg.NoData)
-
-        ## execute phase
-
-        msg = _pgmsg.Execute('')
-        await self._send_msg(msg, _pgmsg.Flush())
-
-        self._query_execute_phase_started = True
+        msg = _pgmsg.Query(query)
+        await self._send_msg(msg)
 
         results = []
-        while msg := await self._get_msg(
-                _pgmsg.EmptyQueryResponse,
+        row_desc = None
+        while True:
+            msg = await self._get_msg(
+                _pgmsg.ErrorResponse,
                 _pgmsg.CommandComplete,
                 _pgmsg.DataRow,
-                _pgmsg.ErrorResponse,
-                _pgmsg.PortalSuspended):
-            if isinstance(msg, _pgmsg.DataRow):
-                if not query.dont_decode_values:
+                _pgmsg.RowDescription,
+                _pgmsg.EmptyQueryResponse)
+            if isinstance(msg, _pgmsg.ErrorResponse):
+                raise get_exc_from_msg(
+                    msg,
+                    desc_prefix=(
+                        f'Error executing query: {query}\n   '
+                    ),
+                )
+            elif isinstance(msg, _pgmsg.DataRow):
+                if not dont_decode_values:
                     row = self._codec_helper.decode_row(
                         msg.columns, row_desc)
                     results.append(row)
                 else:
                     results.append(msg.columns)
+            elif isinstance(msg, _pgmsg.EmptyQueryResponse):
+                self._query_row_count = 0
+                break
+            elif isinstance(msg, _pgmsg.RowDescription):
+                row_desc = msg.fields
             elif isinstance(msg, _pgmsg.CommandComplete):
                 if msg.cmd_tag.startswith(b'SELECT'):
                     _, rows = msg.cmd_tag.split(b' ')
@@ -458,53 +353,8 @@ class Connection:
                 else:
                     self._query_row_count = None
                 break
-            elif isinstance(msg, _pgmsg.ErrorResponse):
-                raise get_exc_from_msg(
-                    msg,
-                    desc_prefix=(
-                        f'Error processing query: {query.text}\n   '
-                    ),
-                )
-            elif isinstance(msg, _pgmsg.EmptyQueryResponse):
-                self._query_row_count = 0
-                return []
-            elif isinstance(msg, _pgmsg.PortalSuspended):
-                raise InternalError(
-                    'Encountered PortalSuspended but this should not '
-                    'happen in current implementation, since we do not '
-                    'set max_rows to a non-zero value.')
             else:
-                assert False, 'This should not happen!'
-
-        ## close phase
-
-        msg = _pgmsg.Close(b'P', b'')
-        await self._send_msg(msg, _pgmsg.Sync())
-
-        self._query_close_phase_started = True
-
-        msg = await self._get_msg(_pgmsg.CloseComplete,
-                                  _pgmsg.ErrorResponse)
-        if isinstance(msg, _pgmsg.ErrorResponse):
-            raise get_exc_from_msg(
-                msg,
-                desc_prefix=(
-                    f'Error parsing query: {query.text}\n   '
-                ),
-            )
-        assert isinstance(msg, _pgmsg.CloseComplete)
-
-        msg = await self._get_msg(_pgmsg.ReadyForQuery,
-                                  _pgmsg.ErrorResponse)
-        if isinstance(msg, _pgmsg.ErrorResponse):
-            raise get_exc_from_msg(
-                msg,
-                desc_prefix=(
-                    f'Error parsing query: {query.text}\n   '
-                ),
-            )
-        assert isinstance(msg, _pgmsg.ReadyForQuery)
-        await self._handle_msg_ready_for_query(msg)
+                assert False
 
         return results
 
@@ -620,7 +470,7 @@ class Connection:
 
         self._is_ready = True
         async with self._is_ready_cv:
-            self._is_ready_cv.notify()
+            self._is_ready_cv.notify_all()
 
     async def _handle_msg_row_description(self, msg):
         self._row_desc = msg.fields
@@ -681,7 +531,7 @@ class Connection:
         )
 
     async def _load_pg_types(self):
-        results = await self._execute(
+        results = await self._execute_simple(
             'select typname, oid from pg_catalog.pg_type',
             dont_decode_values=True,
             protocol_format=PgProtocolFormat.TEXT)
