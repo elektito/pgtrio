@@ -1,4 +1,5 @@
 import logging
+import warnings
 import trio
 from enum import Enum
 from contextlib import asynccontextmanager
@@ -542,8 +543,9 @@ class Connection:
             severity = str(severity)
 
         self.notices.append((severity, notice_msg))
-        logger.info(
-            'Received notice from backend: [{severity}] {notice_msg}')
+        log_msg = f'Received notice from backend: [{severity}] {notice_msg}'
+        logger.info(log_msg)
+        warnings.warn(log_msg)
 
     async def _handle_msg_backend_key_data(self, msg):
         self._backend_pid = msg.pid

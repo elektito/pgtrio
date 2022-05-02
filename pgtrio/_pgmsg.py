@@ -675,8 +675,8 @@ class NoticeResponse(PgMessage, side='backend'):
     # each denoting a code and a value. The custom _deserializer
     # gathers these in a field named "notices".
 
-    def __init__(self, notices=[]):
-        self.notices = []
+    def __init__(self, pairs=None):
+        self.pairs = pairs or []
 
     def __repr__(self):
         nfields = f'({len(self.notices)} field(s))'
@@ -686,21 +686,23 @@ class NoticeResponse(PgMessage, side='backend'):
 
     @classmethod
     def _deserialize(cls, msg, start, length):
-        obj = cls()
+        pairs = []
         idx = start
         while True:
             if idx >= len(msg):
                 raise ValueError(
                     'Unterminated NoticeMessage message (should end '
                     'with a zero byte)')
-            code, n = Byte1.deserialize(msg, start)
+            code, n = Byte1.deserialize(msg, idx)
             if code == b'\0':
                 break
             code = chr(code[0])  # convert e.g. b'C' to 'C'
             idx += n
-            value, n = String.deserialize(msg, start)
-            obj.notices.append((code, value))
+            value, n = String.deserialize(msg, idx)
             idx += n
+            pairs.append((code, value))
+        obj = cls(pairs)
+        return obj
 
 
 class ParameterDescription(PgMessage, side='backend'):
