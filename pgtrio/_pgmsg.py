@@ -495,9 +495,27 @@ class Bind(PgMessage, side='frontend'):
             result_format_codes
         )
 
+    def __repr__(self):
+        params = ''
+        if self.params:
+            params = f' {self.params!r}'
+        pcodes = ''
+        if self.param_format_codes:
+            pcodes = f' param_fmt={[int(c) for c in self.param_format_codes]!r}'
+        rcodes = ''
+        if self.result_format_codes:
+            rcodes = f' result_fmt={[int(c) for c in self.result_format_codes]!r}'
+        return (
+            f'<Bind portal={self.portal_name} stmt={self.stmt_name}'
+            f'{params}{pcodes}{rcodes}>'
+        )
+
 
 class BindComplete(PgMessage, side='backend'):
     _type = b'2'
+
+    def __repr__(self):
+        return '<BindComplete>'
 
 
 class CommandComplete(PgMessage, side='backend'):
@@ -538,6 +556,9 @@ class Close(PgMessage, side='frontend'):
 
 class CloseComplete(PgMessage, side='backend'):
     _type = b'3'
+
+    def __repr__(self):
+        return '<CloseComplete>'
 
 
 class DataRow(PgMessage, side='backend'):
@@ -683,6 +704,9 @@ class NegotiateProtocolVersion(PgMessage, side='backend'):
 
 class NoData(PgMessage, side='backend'):
     _type = b'n'
+
+    def __repr__(self):
+        return '<NoData>'
 
 
 class NoticeResponse(PgMessage, side='backend'):
