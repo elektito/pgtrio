@@ -142,13 +142,7 @@ class PreparedStatement:
             try:
                 results = await self._execute(*params, limit=limit)
             finally:
-                try:
-                    msg = await self.conn._get_msg(_pgmsg.ReadyForQuery)
-                    await self.conn._handle_msg_ready_for_query(msg)
-                except:
-                    # can't salvage connection at this point
-                    self.conn.close()
-                    raise
+                await self._wait_for_ready()
 
         return results
 
@@ -174,6 +168,10 @@ class PreparedStatement:
         else:
             msgs = [bind_msg, describe_portal_msg, sync_msg]
         await self.conn._send_msg(*msgs)
+
+        # sent messages, so no other query allowed until we have a
+        # ReadyForQuery
+        self.conn._is_ready = False
 
         results = []
         while True:
@@ -215,6 +213,7 @@ class PreparedStatement:
                 break
 
         if should_close:
+            await self._wait_for_ready()
             await self._close_portal()
 
         return results
@@ -244,13 +243,7 @@ class PreparedStatement:
             try:
                 results = await self._exec_continue(limit=limit)
             finally:
-                try:
-                    msg = await self.conn._get_msg(_pgmsg.ReadyForQuery)
-                    await self.conn._handle_msg_ready_for_query(msg)
-                except:
-                    # can't salvage connection at this point
-                    self.conn.close()
-                    raise
+                await self._wait_for_ready()
 
         return results
 
@@ -259,7 +252,10 @@ class PreparedStatement:
         sync_msg = _pgmsg.Sync()
         await self.conn._send_msg(execute_msg, sync_msg)
 
+        self.conn._is_ready = False
+
         results = []
+        should_close = False
         while True:
             msg = await self.conn._get_msg(
                 _pgmsg.ErrorResponse,
@@ -278,14 +274,29 @@ class PreparedStatement:
                     ),
                 )
             elif isinstance(msg, _pgmsg.CommandComplete):
-                await self._close_portal()
+                should_close = True
                 break
             elif isinstance(msg, _pgmsg.PortalSuspended):
                 break
             else:
                 assert False
 
+        if should_close:
+            await self._wait_for_ready()
+            await self._close_portal()
+
         return results
+
+    async def _wait_for_ready(self):
+        if not self.conn._is_ready:
+            try:
+                msg = await self.conn._get_msg(_pgmsg.ReadyForQuery)
+                await self.conn._handle_msg_ready_for_query(msg)
+                self.conn._is_ready = True
+            except:
+                # can't salvage connection at this point
+                self.conn.close()
+                raise
 
     async def _close_portal(self):
         if not self._execute_started or self._portal_closed:
@@ -294,6 +305,8 @@ class PreparedStatement:
         close_msg = _pgmsg.Close(b'P', self._portal_name)
         sync_msg = _pgmsg.Sync()
         await self.conn._send_msg(close_msg, sync_msg)
+
+        self.conn._is_ready = False
 
         # handle close portal response
         msg = await self.conn._get_msg(_pgmsg.CloseComplete,

@@ -164,7 +164,6 @@ class Connection:
                   protocol_format=protocol_format)
 
         async with self._query_lock:
-            self._is_ready = False
             try:
                 results = await self._process_query(q)
             finally:
@@ -326,6 +325,10 @@ class Connection:
 
         msg = _pgmsg.Parse('', query.text)
         await self._send_msg(msg, _pgmsg.Flush())
+
+        # sent messages, so no other query allowed until we have a
+        # ReadyForQuery
+        self._is_ready = False
 
         self._query_parse_phase_started = True
 
@@ -510,6 +513,20 @@ class Connection:
                 await self._handle_unsolicited_msg(msg)
 
     async def _send_msg(self, *msgs):
+        query_message_types = (
+            _pgmsg.Query,
+            _pgmsg.Parse,
+            _pgmsg.Bind,
+            _pgmsg.Describe,
+            _pgmsg.Close,
+            _pgmsg.Flush,
+            _pgmsg.Execute,
+        )
+        if any(isinstance(msg, query_message_types) for msg in msgs):
+            # when one of these messages is sent, connection is not
+            # ready anymore until we get a ReadyForQuery message
+            self._is_ready = False
+
         data = b''.join(bytes(msg) for msg in msgs)
         await self._outgoing_send_chan.send(data)
 
