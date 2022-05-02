@@ -14,6 +14,16 @@ async def test_simple(conn):
     assert results == [(10,)]
 
 
+async def test_params(conn):
+    await conn.execute('create table foobar (foo int)')
+
+    stmt = await conn.prepare('insert into foobar (foo) values ($1)')
+    await stmt.execute(10)
+
+    results = await conn.execute('select * from foobar')
+    assert results == [(10,)]
+
+
 async def test_multipart(conn):
     await conn.execute('create table foobar (foo int)')
     await conn.execute('insert into foobar (foo) values (10)')

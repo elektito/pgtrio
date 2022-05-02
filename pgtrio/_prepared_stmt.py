@@ -156,8 +156,15 @@ class PreparedStatement:
         should_close = False
         protocol_format = self.conn.protocol_format
 
+        enc_params = []
+        for param, param_oid in zip(params, self._param_oids):
+            param_value = self.conn._codec_helper.encode_value(
+                param, param_oid,
+                protocol_format=protocol_format)
+            enc_params.append(param_value)
+
         bind_msg = _pgmsg.Bind(self._portal_name, self._stmt_name,
-                               params=params,
+                               params=enc_params,
                                param_format_codes=[protocol_format],
                                result_format_codes=[protocol_format])
         describe_portal_msg = _pgmsg.Describe(b'P', self._portal_name)
