@@ -16,6 +16,7 @@ class PreparedStatement:
         self._execute_started = False
         self._portal_closed = False
 
+        self._initialized = False
         self._initial_transaction = None
         self._param_oids = None
         self._row_desc = None
@@ -25,6 +26,25 @@ class PreparedStatement:
         return self._init().__await__()
 
     async def _init(self):
+        if self._initialized:
+            return
+
+        if self.conn._closed.is_set():
+            raise ProgrammingError('Connection is closed.')
+
+        if not self.conn._pg_types_loaded.is_set():
+            # the "if" is not technically necessary, but avoids an
+            # extra trio checkpoint.
+            await self.conn._pg_types_loaded.wait()
+
+        async with self.conn._query_lock:
+            await self._parse_query()
+
+        self._initialized = True
+
+        return self
+
+    async def _parse_query(self):
         self._stmt_name = self.conn._get_unique_id('stmt')
 
         parse_msg = _pgmsg.Parse(self._stmt_name, self.query)
@@ -65,8 +85,6 @@ class PreparedStatement:
         msg = await self.conn._get_msg(_pgmsg.ReadyForQuery)
         await self.conn._handle_msg_ready_for_query(msg)
 
-        return self
-
     @property
     def parameters(self):
         if not self._row_desc:
@@ -83,6 +101,10 @@ class PreparedStatement:
         ]
 
     async def execute(self, *params, limit=None):
+        if not self._initialized:
+            raise ProgrammingError(
+                'PreparedStatement not initialized')
+
         if self.conn._closed.is_set():
             raise ProgrammingError('Connection is closed.')
 
