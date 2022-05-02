@@ -179,13 +179,13 @@ class Connection:
     def close(self):
         self._closed.set()
 
-    @wraps(Transaction)
-    def transaction(self, *args, **kwargs):
-        return Transaction(self, *args, **kwargs)
+    def transaction(self, isolation_level=None, read_write_mode=None,
+                    deferrable=False):
+        return Transaction(self, isolation_level, read_write_mode,
+                           deferrable)
 
-    @wraps(PreparedStatement)
-    def prepare(self, *args, **kwargs):
-        return PreparedStatement(self, *args, **kwargs)
+    def prepare(self, conn, query):
+        return PreparedStatement(self, conn, query)
 
     async def _run(self):
         await self._connect()
