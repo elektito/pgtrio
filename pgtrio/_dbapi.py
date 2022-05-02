@@ -181,11 +181,13 @@ class Connection:
 
     def transaction(self, isolation_level=None, read_write_mode=None,
                     deferrable=False):
-        return Transaction(self, isolation_level, read_write_mode,
-                           deferrable)
+        return Transaction(self,
+                           isolation_level=isolation_level,
+                           read_write_mode=read_write_mode,
+                           deferrable=deferrable)
 
-    def prepare(self, conn, query):
-        return PreparedStatement(self, conn, query)
+    def prepare(self, query):
+        return PreparedStatement(self, query)
 
     async def _run(self):
         await self._connect()
