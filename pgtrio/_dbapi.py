@@ -266,7 +266,8 @@ class Connection:
                 except trio.ClosedResourceError:
                     pass
 
-        if not self._closed.is_set():
+        if not self._closed.is_set() and \
+           not self._nursery.cancel_scope.cancelled_caught:
             self._nursery.start_soon(close_stmt)
 
     async def _flush_extra_messages_after_query(self):
