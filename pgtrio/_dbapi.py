@@ -186,6 +186,10 @@ class Connection:
                            read_write_mode=read_write_mode,
                            deferrable=deferrable)
 
+    async def cursor(self, query, *params, **kwargs):
+        stmt = await self.prepare(query)
+        return await stmt.cursor(*params, **kwargs)
+
     def prepare(self, query):
         return PreparedStatement(self, query)
 

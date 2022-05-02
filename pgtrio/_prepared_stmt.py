@@ -3,6 +3,10 @@ from . import _pgmsg
 from ._utils import get_exc_from_msg
 from ._exceptions import ProgrammingError, InterfaceError
 from ._transaction import Transaction
+from ._cursor import Cursor
+
+
+NO_EXECUTE = object()
 
 
 ParameterDesc = namedtuple('ParameterDesc', ['name', 'type'])
@@ -100,6 +104,12 @@ class PreparedStatement:
             in self._row_desc
         ]
 
+    async def cursor(self, *params, **kwargs):
+        await self.execute(limit=NO_EXECUTE)
+        cursor = Cursor(self, **kwargs)
+        await cursor._init()
+        return cursor
+
     async def execute(self, *params, limit=None):
         if not self._initialized:
             raise ProgrammingError(
@@ -113,7 +123,8 @@ class PreparedStatement:
             # extra trio checkpoint.
             await self._pg_types_loaded.wait()
 
-        if limit and not self.conn.in_transaction:
+        if (limit and limit is not NO_EXECUTE and
+            not self.conn.in_transaction):
             # we don't allow this because the only use case for
             # "limit" is to use exec_continue later, but exec_continue
             # won't work outside a transaction (postgres will complain
@@ -154,10 +165,15 @@ class PreparedStatement:
                                param_format_codes=[protocol_format],
                                result_format_codes=[protocol_format])
         describe_portal_msg = _pgmsg.Describe(b'P', self._portal_name)
-        execute_msg = _pgmsg.Execute(self._portal_name, max_rows=limit or 0)
         sync_msg = _pgmsg.Sync()
-        await self.conn._send_msg(
-            bind_msg, describe_portal_msg, execute_msg, sync_msg)
+        if limit is not NO_EXECUTE:
+            execute_msg = _pgmsg.Execute(self._portal_name,
+                                         max_rows=limit or 0)
+            msgs = [bind_msg, describe_portal_msg, execute_msg,
+                    sync_msg]
+        else:
+            msgs = [bind_msg, describe_portal_msg, sync_msg]
+        await self.conn._send_msg(*msgs)
 
         results = []
         while True:
@@ -184,8 +200,12 @@ class PreparedStatement:
                 results.append(row)
             elif isinstance(msg, _pgmsg.RowDescription):
                 self._row_desc = msg.fields
+                if limit is NO_EXECUTE:
+                    break
             elif isinstance(msg, _pgmsg.NoData):
                 should_close = True
+                if limit is NO_EXECUTE:
+                    break
             elif isinstance(msg, _pgmsg.EmptyQueryResponse):
                 should_close = True
             elif isinstance(msg, _pgmsg.CommandComplete):
