@@ -134,7 +134,9 @@ class PreparedStatement:
 
         if self._execute_started and not self._portal_closed:
             # close the previously running portal
-            await self._close_portal()
+            async with self.conn._query_lock:
+                await self._close_portal()
+                await self._wait_for_ready()
 
         async with self.conn._query_lock:
             cur_transaction = Transaction.get_cur_transaction(self.conn)
