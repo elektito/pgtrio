@@ -440,6 +440,10 @@ class Bind(PgMessage, side='frontend'):
 
     def __init__(self, portal_name, stmt_name, params=None,
                  param_format_codes=None, result_format_codes=None):
+        if not isinstance(stmt_name, (str, bytes)):
+            raise TypeError('stmt_name should be a bytes or str')
+        if not isinstance(portal_name, (str, bytes)):
+            raise TypeError('portal_name should be a bytes or str')
         self.portal_name = portal_name
         self.stmt_name = stmt_name
         self.params = params or []
