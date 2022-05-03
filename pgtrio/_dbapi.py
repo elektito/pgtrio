@@ -132,6 +132,7 @@ class Connection:
         return results
 
     async def _execute_simple(self, query,
+                              query_lock_alraedy_acquired=False,
                               dont_decode_values=False,
                               protocol_format=None):
         # even though the null character is valid UTF-8, we can't use
@@ -148,14 +149,19 @@ class Connection:
         if protocol_format is None:
             protocol_format = self.protocol_format
 
-        async with self._query_lock:
-            try:
-                results = await self._process_simple_query(
-                    query,
-                    dont_decode_values=dont_decode_values,
-                    protocol_format=protocol_format)
-            finally:
-                await self._wait_for_ready()
+        if not query_lock_alraedy_acquired:
+            await self._query_lock.acquire()
+
+        try:
+            results = await self._process_simple_query(
+                query,
+                dont_decode_values=dont_decode_values,
+                protocol_format=protocol_format)
+        finally:
+            await self._wait_for_ready()
+
+            if not query_lock_alraedy_acquired:
+                self._query_lock.release()
 
         return results
 
@@ -244,15 +250,27 @@ class Connection:
     def _close_stmt(self, stmt_name):
         # this function is called by the __del__ method of a
         # PreparedStatement to deallocate the statement in the
-        # background. The function itself cannot execute this since
+        # background. That function itself cannot execute this since
         # it's not async.
 
         async def close_stmt():
-            if not self._closed.is_set():
-                try:
-                    await self.execute(f'deallocate {stmt_name}')
-                except trio.ClosedResourceError:
-                    pass
+            if self._closed.is_set():
+                return
+
+            while True:
+                await self._query_lock.acquire()
+                if self._query_status == QueryStatus.IDLE:
+                    break
+                self._query_lock.release()
+
+            try:
+                await self._execute_simple(
+                    f'deallocate {stmt_name}',
+                    query_lock_alraedy_acquired=True)
+            except (trio.ClosedResourceError, DatabaseError):
+                pass
+            finally:
+                self._query_lock.release()
 
         if not self._closed.is_set() and \
            not self._nursery.cancel_scope.cancelled_caught:
