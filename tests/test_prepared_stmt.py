@@ -24,6 +24,12 @@ async def test_params(conn):
     assert results == [(10,)]
 
 
+async def test_param_descs(conn):
+    stmt = await conn.prepare('select generate_series(0, $1)')
+    param_descs = stmt.parameters
+    assert len(param_descs) == 1
+    assert param_descs[0].type == 'int4'
+
 async def test_multipart(conn):
     await conn.execute('create table foobar (foo int)')
     await conn.execute('insert into foobar (foo) values (10)')

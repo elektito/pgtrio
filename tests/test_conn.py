@@ -481,3 +481,9 @@ async def test_concurrent_queries(conn):
         nursery.start_soon(invalid_query)
         nursery.start_soon(successful_query)
         nursery.start_soon(failing_query)
+
+
+async def test_closed(conn):
+    conn.close()
+    with raises(pgtrio.ProgrammingError):
+        await conn.execute('select 1')

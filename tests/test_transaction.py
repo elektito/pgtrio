@@ -1,8 +1,9 @@
 import trio
 from pytest import raises, mark
-from pgtrio import PgIsolationLevel, PgReadWriteMode
+from pgtrio import (
+    PgIsolationLevel, PgReadWriteMode, InterfaceError, DatabaseError
+)
 from utils import postgres_socket_file, conn
-from pgtrio._exceptions import InterfaceError
 
 
 isolation_levels = [
@@ -19,15 +20,31 @@ rw_modes = [
 
 
 @mark.parametrize('isolation', isolation_levels)
-@mark.parametrize('rw_mode', rw_modes)
+@mark.parametrize('rw_mode', [PgReadWriteMode.READ_WRITE])
 @mark.parametrize('deferrable', [True, False])
 async def test_transaction_normal(conn, isolation, rw_mode, deferrable):
     await conn.execute('create table foobar (foo int)')
     await conn.execute('insert into foobar (foo) values (10)')
-    async with conn.transaction(isolation_level=isolation):
+    async with conn.transaction(isolation_level=isolation,
+                                read_write_mode=rw_mode,
+                                deferrable=deferrable):
         await conn.execute('insert into foobar (foo) values (20)')
     results = await conn.execute('select * from foobar')
     assert results == [(10,), (20,)]
+
+
+async def test_read_only(conn):
+    await conn.execute('create table foobar (foo int)')
+    await conn.execute('insert into foobar (foo) values (10)')
+    async with conn.transaction(
+            read_write_mode=PgReadWriteMode.READ_ONLY):
+
+        # this should go fine
+        await conn.execute('select * from foobar')
+
+        # but this shouldn't, since it tries to write
+        with raises(DatabaseError):
+            await conn.execute('insert into foobar (foo) values (20)')
 
 
 async def test_transaction_error(conn):
