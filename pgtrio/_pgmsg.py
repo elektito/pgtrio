@@ -822,9 +822,24 @@ class Parse(PgMessage, side='frontend'):
             param_types
         )
 
+    def __repr__(self):
+        name = self.name
+        if isinstance(name, bytes):
+            name = name.decode('utf-8')
+        query = self.query
+        if isinstance(query, bytes):
+            query = query.decode('utf-8')
+        return (
+            f'<Parse name={name} query="{query}" '
+            f'param_types={self.param_types}>'
+        )
+
 
 class ParseComplete(PgMessage, side='backend'):
     _type = b'1'
+
+    def __repr__(self):
+        return f'<ParseComplete>'
 
 
 class PasswordMessage(PgMessage, side='frontend'):
@@ -883,6 +898,12 @@ class Query(PgMessage, side='frontend'):
                 f'{type(query)}')
 
         self.query = query
+
+    def __repr__(self):
+        query = self.query
+        if isinstance(query, bytes):
+            query = query.decode('utf-8')
+        return f'<Query {query}>'
 
 
 class ReadyForQuery(PgMessage, side='backend'):
