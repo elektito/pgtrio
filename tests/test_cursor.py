@@ -1,6 +1,6 @@
 from pytest import raises
 from utils import postgres_socket_file, conn
-from pgtrio._exceptions import ProgrammingError
+from pgtrio import ProgrammingError
 
 
 async def test_no_transaction(conn):

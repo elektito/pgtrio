@@ -1,7 +1,7 @@
 import trio
 from pytest import raises
 from utils import postgres_socket_file, conn
-from pgtrio._exceptions import InterfaceError, ProgrammingError
+from pgtrio import InterfaceError, ProgrammingError
 
 
 async def test_simple(conn):
