@@ -49,8 +49,11 @@ class PreparedStatement:
             # extra trio checkpoint.
             await self.conn._pg_types_loaded.wait()
 
-        async with self.conn._query_lock:
-            await self._parse_query()
+        try:
+            async with self.conn._query_lock:
+                await self._parse_query()
+        finally:
+            await self._wait_for_ready()
 
         self._initialized = True
 
