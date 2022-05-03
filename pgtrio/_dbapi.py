@@ -423,11 +423,6 @@ class Connection:
             f'Received backend key data: pid={msg.pid} '
             f'secret_key={msg.secret_key}')
 
-    async def _handle_msg_command_complete(self, msg):
-        if msg.cmd_tag.startswith(b'SELECT'):
-            _, rows = msg.cmd_tag.split(b' ')
-            self._query_row_count = int(rows.decode('ascii'))
-
     async def _handle_msg_parameter_status(self, msg):
         self._server_vars[msg.param_name] = msg.param_value
 
