@@ -34,16 +34,17 @@ class Transaction:
 
     async def _commit(self):
         if self._savepoint_id is None:
-            await self.conn.execute('commit')
+            await self.conn._execute_simple('commit')
         else:
             await self.conn.execute(
                 f'release savepoint {self._savepoint_id}')
 
     async def _rollback(self):
         if self._savepoint_id is None:
-            await self.conn.execute('rollback')
+            await self.conn._execute_simple('rollback')
         else:
-            await self.conn.execute(f'rollback to {self._savepoint_id}')
+            await self.conn._execute_simple(
+                f'rollback to {self._savepoint_id}')
 
     async def __aenter__(self):
         stack = transaction_stack_per_conn.get()[id(self.conn)]
@@ -75,12 +76,12 @@ class Transaction:
         if self.deferrable:
             query += f' deferrable'
 
-        await self.conn.execute(query)
+        await self.conn._execute_simple(query)
 
     async def _start_savepoint(self):
         self._savepoint_id = self.conn._get_unique_id('savepoint')
         query = f'savepoint {self._savepoint_id}'
-        await self.conn.execute(query)
+        await self.conn._execute_simple(query)
 
     async def __aexit__(self, extype, ex, tb):
         stack = transaction_stack_per_conn.get()[id(self.conn)]
