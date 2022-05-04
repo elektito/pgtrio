@@ -53,7 +53,7 @@ class PreparedStatement:
             async with self.conn._query_lock:
                 await self._parse_query()
         finally:
-            await self._wait_for_ready()
+            await self.conn._wait_for_ready()
 
         self._initialized = True
 
@@ -151,7 +151,7 @@ class PreparedStatement:
             # close the previously running portal
             async with self.conn._query_lock:
                 await self._close_portal()
-                await self._wait_for_ready()
+                await self.conn._wait_for_ready()
 
         async with self.conn._query_lock:
             cur_transaction = Transaction.get_cur_transaction(self.conn)
@@ -159,7 +159,7 @@ class PreparedStatement:
             try:
                 results = await self._execute(*params, limit=limit)
             finally:
-                await self._wait_for_ready()
+                await self.conn._wait_for_ready()
 
         return results
 
@@ -243,7 +243,7 @@ class PreparedStatement:
                 break
 
         if should_close:
-            await self._wait_for_ready()
+            await self.conn._wait_for_ready()
             await self._close_portal()
 
         return results
@@ -273,7 +273,7 @@ class PreparedStatement:
             try:
                 results = await self._exec_continue(limit=limit)
             finally:
-                await self._wait_for_ready()
+                await self.conn._wait_for_ready()
 
         return results
 
@@ -317,21 +317,10 @@ class PreparedStatement:
                 assert False
 
         if should_close:
-            await self._wait_for_ready()
+            await self.conn._wait_for_ready()
             await self._close_portal()
 
         return results
-
-    async def _wait_for_ready(self):
-        if not self.conn._is_ready:
-            try:
-                msg = await self.conn._get_msg(_pgmsg.ReadyForQuery)
-                await self.conn._handle_msg_ready_for_query(msg)
-                self.conn._is_ready = True
-            except:
-                # can't salvage connection at this point
-                self.conn.close()
-                raise
 
     async def _close_portal(self):
         if not self._execute_started or self._portal_closed:
