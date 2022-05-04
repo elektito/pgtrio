@@ -1,7 +1,7 @@
 import trio
 from functools import wraps
 from contextlib import asynccontextmanager
-from ._dbapi import Connection
+from ._connection import Connection
 
 
 class Pool:
