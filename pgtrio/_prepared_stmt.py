@@ -34,9 +34,6 @@ class PreparedStatement:
         self._stmt_name = None
         self._query_row_count = None
 
-    def __await__(self):
-        return self._init().__await__()
-
     async def _init(self):
         if self._initialized:
             return
@@ -50,8 +47,7 @@ class PreparedStatement:
             await self.conn._pg_types_loaded.wait()
 
         try:
-            async with self.conn._query_lock:
-                await self._parse_query()
+            await self._parse_query()
         finally:
             await self.conn._wait_for_ready()
 
@@ -149,17 +145,14 @@ class PreparedStatement:
 
         if self._execute_started and not self._portal_closed:
             # close the previously running portal
-            async with self.conn._query_lock:
-                await self._close_portal()
-                await self.conn._wait_for_ready()
+            await self._close_portal()
+            await self.conn._wait_for_ready()
 
-        async with self.conn._query_lock:
-            cur_transaction = Transaction.get_cur_transaction(self.conn)
-            self._initial_transaction = cur_transaction
-            try:
-                results = await self._execute(*params, limit=limit)
-            finally:
-                await self.conn._wait_for_ready()
+        self._initial_transaction = self.conn.current_transaction
+        try:
+            results = await self._execute(*params, limit=limit)
+        finally:
+            await self.conn._wait_for_ready()
 
         return results
 
@@ -264,16 +257,14 @@ class PreparedStatement:
                 'Cannot continue execution of a statement outside '
                 'a transaction')
 
-        cur_transaction = Transaction.get_cur_transaction(self.conn)
-        if cur_transaction != self._initial_transaction:
+        if self.conn.current_transaction != self._initial_transaction:
             raise ProgrammingError(
                 'Cannot continue execution from another transaction')
 
-        async with self.conn._query_lock:
-            try:
-                results = await self._exec_continue(limit=limit)
-            finally:
-                await self.conn._wait_for_ready()
+        try:
+            results = await self._exec_continue(limit=limit)
+        finally:
+            await self.conn._wait_for_ready()
 
         return results
 
@@ -361,8 +352,7 @@ class PreparedStatement:
                 'Cannot continue execution of a statement outside '
                 'a transaction')
 
-        cur_transaction = Transaction.get_cur_transaction(self.conn)
-        if cur_transaction != self._initial_transaction:
+        if self.conn.current_transaction != self._initial_transaction:
             raise ProgrammingError(
                 'Cannot continue execution from another transaction')
 

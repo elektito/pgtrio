@@ -131,25 +131,3 @@ async def test_multipart_no_transaction2(conn):
 
     with raises(InterfaceError):
         await stmt.exec_continue()
-
-
-async def test_multiple(conn):
-    await conn.execute('create table foobar (foo int)')
-    await conn.execute('insert into foobar (foo) values (10)')
-    await conn.execute('insert into foobar (foo) values (20)')
-    await conn.execute('insert into foobar (foo) values (30)')
-
-    stmt = await conn.prepare('select * from foobar')
-
-    async def perform(i):
-        async with conn.transaction():
-            r = await stmt.execute(limit=1)
-            assert r == [(10,)]
-            r = await stmt.exec_continue(limit=1)
-            assert r == [(20,)]
-
-    async with trio.open_nursery() as nursery:
-        nursery.start_soon(perform, 1)
-        nursery.start_soon(perform, 2)
-
-        await perform(3)

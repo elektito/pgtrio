@@ -87,6 +87,11 @@ async def conn(postgres_socket_file, request):
     async with pgtrio.connect(
             'testdb',
             unix_socket_path=postgres_socket_file) as conn:
+
+        # owner check won't work in tests, because fixtures are not
+        # created in the same task as the test function
+        conn._disable_owner_check = True
+
         yield conn
 
 

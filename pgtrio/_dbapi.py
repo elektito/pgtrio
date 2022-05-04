@@ -12,6 +12,7 @@ from ._transaction import Transaction
 from ._prepared_stmt import PreparedStatement
 from ._exceptions import (
     InternalError, DatabaseError, OperationalError, ProgrammingError,
+    InterfaceError,
 )
 
 DEFAULT_PG_UNIX_SOCKET = '/var/run/postgresql/.s.PGSQL.5432'
@@ -52,6 +53,8 @@ class Connection:
         self.ssl = ssl
         self.protocol_format = PgProtocolFormat.convert(protocol_format)
 
+        self.current_transaction = None
+
         self._stream = None
         self._codec_helper = CodecHelper()
 
@@ -63,15 +66,12 @@ class Connection:
         self._query_status = QueryStatus.INITIALIZING
         self._query_row_count = None
         self._query_results = []
-        self._query_lock = trio.Lock()
-        self._query_parse_phase_started = False
-        self._query_describe_stmt_phase_started = False
-        self._query_bind_phase_started = False
-        self._query_describe_portal_phase_started = False
-        self._query_execute_phase_started = False
-        self._query_close_phase_started = False
+        self._statements_to_close = []
 
-        self._transaction_lock = trio.Lock()
+        self._owner = trio.lowlevel.current_task()
+        if self._owner is None:
+            raise InterfaceError('Connection not created in a task')
+        self._disable_owner_check = False
 
         self._is_ready = False
         self._is_ready_cv = trio.Condition()
@@ -125,43 +125,19 @@ class Connection:
             # extra trio checkpoint.
             await self._pg_types_loaded.wait()
 
+        if not self._disable_owner_check and \
+           trio.lowlevel.current_task() is not self._owner:
+            raise InterfaceError(
+                'Calling task is not owner of the connection')
+
         stmt = await self.prepare(query)
         results = await stmt.execute(*params)
+
+        await self._close_pending_statements()
+
+        # we need to set this right at the end so that
+        # _close_pending_statements does not overwrite it
         self._query_row_count = stmt.rowcount
-
-        return results
-
-    async def _execute_simple(self, query,
-                              query_lock_alraedy_acquired=False,
-                              dont_decode_values=False,
-                              protocol_format=None):
-        # even though the null character is valid UTF-8, we can't use
-        # it in queries, because at the protocol level, the queries
-        # are sent as zero-terminated strings.
-        if '\x00' in query:
-            raise ProgrammingError(
-                'NULL character is not valid in PostgreSQL queries.')
-
-        async with self._is_ready_cv:
-            while not self._is_ready:
-                await self._is_ready_cv.wait()
-
-        if protocol_format is None:
-            protocol_format = self.protocol_format
-
-        if not query_lock_alraedy_acquired:
-            await self._query_lock.acquire()
-
-        try:
-            results = await self._process_simple_query(
-                query,
-                dont_decode_values=dont_decode_values,
-                protocol_format=protocol_format)
-        finally:
-            await self._wait_for_ready()
-
-            if not query_lock_alraedy_acquired:
-                self._query_lock.release()
 
         return results
 
@@ -179,8 +155,41 @@ class Connection:
         stmt = await self.prepare(query)
         return await stmt.cursor(*params, **kwargs)
 
-    def prepare(self, query):
-        return PreparedStatement(self, query)
+    async def prepare(self, query):
+        stmt = PreparedStatement(self, query)
+        await stmt._init()
+        return stmt
+
+    async def _execute_simple(self, query,
+                              dont_decode_values=False,
+                              protocol_format=None,
+                              no_close_pending=False):
+        # even though the null character is valid UTF-8, we can't use
+        # it in queries, because at the protocol level, the queries
+        # are sent as zero-terminated strings.
+        if '\x00' in query:
+            raise ProgrammingError(
+                'NULL character is not valid in PostgreSQL queries.')
+
+        async with self._is_ready_cv:
+            while not self._is_ready:
+                await self._is_ready_cv.wait()
+
+        if protocol_format is None:
+            protocol_format = self.protocol_format
+
+        try:
+            results = await self._process_simple_query(
+                query,
+                dont_decode_values=dont_decode_values,
+                protocol_format=protocol_format)
+        finally:
+            await self._wait_for_ready()
+
+        if not no_close_pending:
+            await self._close_pending_statements()
+
+        return results
 
     async def _run(self):
         await self._connect()
@@ -248,33 +257,7 @@ class Connection:
             buf = buf[start:]
 
     def _close_stmt(self, stmt_name):
-        # this function is called by the __del__ method of a
-        # PreparedStatement to deallocate the statement in the
-        # background. That function itself cannot execute this since
-        # it's not async.
-
-        async def close_stmt():
-            if self._closed.is_set():
-                return
-
-            while True:
-                await self._query_lock.acquire()
-                if self._query_status == QueryStatus.IDLE:
-                    break
-                self._query_lock.release()
-
-            try:
-                await self._execute_simple(
-                    f'deallocate {stmt_name}',
-                    query_lock_alraedy_acquired=True)
-            except (trio.ClosedResourceError, DatabaseError):
-                pass
-            finally:
-                self._query_lock.release()
-
-        if not self._closed.is_set() and \
-           not self._nursery.cancel_scope.cancelled_caught:
-            self._nursery.start_soon(close_stmt)
+        self._statements_to_close.append(stmt_name)
 
     async def _wait_for_ready(self):
         if not self._is_ready:
@@ -511,6 +494,21 @@ class Connection:
             protocol_format=PgProtocolFormat.TEXT)
         self._codec_helper.init(results)
         self._pg_types_loaded.set()
+
+    async def _close_pending_statements(self):
+        if self.in_transaction:
+            # the statements to close sometimes do not exist anymore,
+            # causing the deallocate operation to fail, which would in
+            # turn cause current transaction to be aborted.
+            return
+
+        for stmt_name in self._statements_to_close:
+            try:
+                await self._execute_simple(
+                    f'deallocate {stmt_name}', no_close_pending=True)
+            except DatabaseError:
+                # the statement might not exist anymore
+                pass
 
     def _get_unique_id(self, id_type):
         self._id_counters[id_type] += 1

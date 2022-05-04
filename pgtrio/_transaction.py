@@ -1,11 +1,6 @@
 import trio
-from contextvars import ContextVar
 from collections import defaultdict
 from ._exceptions import InterfaceError
-
-
-transaction_stack_per_conn = ContextVar('transaction_stack_per_conn',
-                                        default=defaultdict(list))
 
 
 class TransactionExit(BaseException):
@@ -47,9 +42,7 @@ class Transaction:
                 f'rollback to {self._savepoint_id}')
 
     async def __aenter__(self):
-        stack = transaction_stack_per_conn.get()[id(self.conn)]
-
-        if stack:
+        if self.conn.current_transaction:
             # we're inside a transaction block in the same task.
             await self._start_savepoint()
         else:
@@ -57,13 +50,7 @@ class Transaction:
                 raise InterfaceError(
                     'Cannot start a transaction block inside a '
                     'manually started transaction.')
-            # no transaction block in the current task, synchronize
-            # using a lock (in case concurrent tasks attempt doing
-            # this) and start and new transaction.
-            await self.conn._transaction_lock.acquire()
             await self._start_transaction()
-
-        stack.append(self)
 
         return self
 
@@ -78,15 +65,14 @@ class Transaction:
 
         await self.conn._execute_simple(query)
 
+        self.conn.current_transaction = self
+
     async def _start_savepoint(self):
         self._savepoint_id = self.conn._get_unique_id('savepoint')
         query = f'savepoint {self._savepoint_id}'
         await self.conn._execute_simple(query)
 
     async def __aexit__(self, extype, ex, tb):
-        stack = transaction_stack_per_conn.get()[id(self.conn)]
-        stack.pop()
-
         if extype and issubclass(extype, TransactionExit):
             # return True to signify we've handled the exception
             return True
@@ -98,14 +84,7 @@ class Transaction:
                 await self._rollback()
 
             if not self._savepoint_id:
-                self.conn._transaction_lock.release()
+                self.conn.current_transaction = None
 
         # propagate exception (if any)
         return False
-
-    @staticmethod
-    def get_cur_transaction(conn):
-        stack = transaction_stack_per_conn.get()[id(conn)]
-        if not stack:
-            return None
-        return stack[-1]

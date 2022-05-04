@@ -457,32 +457,6 @@ async def test_wrong_param_type(conn):
             101, 'foobar', object())
 
 
-async def test_concurrent_queries(conn):
-    await conn.execute(
-        'create table foobar (foo int unique, bar int not null)')
-    await conn.execute(
-            'insert into foobar (foo, bar) values ($1, $2)',
-            101, 201)
-
-    async def successful_query():
-        results = await conn.execute('select * from foobar')
-        assert results == [(101, 201)]
-
-    async def invalid_query():
-        with raises(pgtrio.DatabaseError):
-            await conn.execute('foo bar')
-
-    async def failing_query():
-        with raises(pgtrio.DatabaseError):
-            # violate unique and not-null constraints
-            await conn.execute('insert into foobar (foo) values (101)')
-
-    async with trio.open_nursery() as nursery:
-        nursery.start_soon(invalid_query)
-        nursery.start_soon(successful_query)
-        nursery.start_soon(failing_query)
-
-
 async def test_closed(conn):
     conn.close()
     with raises(pgtrio.ProgrammingError):
