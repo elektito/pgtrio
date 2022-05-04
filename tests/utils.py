@@ -78,7 +78,7 @@ def postgres_socket_file():
 @fixture(params=['binary', 'text'])
 async def conn(postgres_socket_file, request):
     fmt = request.param
-    async with pgtrio.connect(
+    async with pgtrio._dbapi.connect(
             'postgres',
             protocol_format=fmt,
             unix_socket_path=postgres_socket_file) as conn:
@@ -93,6 +93,27 @@ async def conn(postgres_socket_file, request):
         conn._disable_owner_check = True
 
         yield conn
+
+
+@fixture(params=['binary', 'text'])
+async def pool(postgres_socket_file, request):
+    fmt = request.param
+    async with pgtrio.connect(
+            'postgres',
+            protocol_format=fmt,
+            unix_socket_path=postgres_socket_file) as conn:
+        await conn.execute('create database testdb')
+
+    def conn_init(conn):
+        # owner check won't work in tests, because fixtures are not
+        # created in the same task as the test function
+        conn._disable_owner_check = True
+
+    async with pgtrio.create_pool(
+            'testdb',
+            pool_conn_init=conn_init,
+            unix_socket_path=postgres_socket_file) as pool:
+        yield pool
 
 
 def find_pg_ctl():

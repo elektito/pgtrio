@@ -1,4 +1,6 @@
+import inspect
 from enum import IntEnum, Enum
+from functools import wraps
 from ._exceptions import DatabaseError
 
 
@@ -58,3 +60,27 @@ def get_exc_from_msg(msg, desc_prefix='', desc_suffix=''):
         error_msg=error_msg,
         severity=severity,
     )
+
+
+def set_event_when_done(event_name):
+    def decorator(method):
+        @wraps(method)
+        async def async_wrapper(self, *args, **kwargs):
+            try:
+                return await method(self, *args, **kwargs)
+            finally:
+                getattr(self, event_name).set()
+
+        @wraps(method)
+        async def sync_wrapper(self, *args, **kwargs):
+            try:
+                return await method(self, *args, **kwargs)
+            finally:
+                getattr(self, event_name).set()
+
+        if inspect.iscoroutinefunction(method):
+            return async_wrapper
+        else:
+            return sync_wrapper
+
+    return decorator

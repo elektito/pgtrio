@@ -38,7 +38,7 @@ class PreparedStatement:
         if self._initialized:
             return
 
-        if self.conn._closed.is_set():
+        if self.conn.closed.is_set():
             raise ProgrammingError('Connection is closed.')
 
         if not self.conn._pg_types_loaded.is_set():
@@ -126,7 +126,7 @@ class PreparedStatement:
             raise ProgrammingError(
                 'PreparedStatement not initialized')
 
-        if self.conn._closed.is_set():
+        if self.conn.closed.is_set():
             raise ProgrammingError('Connection is closed.')
 
         if not self.conn._pg_types_loaded.is_set():
@@ -242,7 +242,7 @@ class PreparedStatement:
         return results
 
     async def exec_continue(self, limit=None):
-        if self.conn._closed.is_set():
+        if self.conn.closed.is_set():
             raise ProgrammingError('Connection is closed.')
 
         if not self._execute_started:
@@ -337,7 +337,7 @@ class PreparedStatement:
         self._portal_closed = True
 
     async def forward(self, n):
-        if self.conn._closed.is_set():
+        if self.conn.closed.is_set():
             raise ProgrammingError('Connection is closed.')
 
         if not self._execute_started:

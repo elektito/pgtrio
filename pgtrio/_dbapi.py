@@ -7,7 +7,9 @@ from functools import wraps
 from collections import defaultdict
 from . import _pgmsg
 from ._codecs import CodecHelper
-from ._utils import PgProtocolFormat, get_exc_from_msg
+from ._utils import (
+    PgProtocolFormat, get_exc_from_msg, set_event_when_done
+)
 from ._transaction import Transaction
 from ._prepared_stmt import PreparedStatement
 from ._exceptions import (
@@ -43,7 +45,8 @@ class Connection:
                  password=None,
                  ssl=True,
                  ssl_required=True,
-                 protocol_format=PgProtocolFormat._DEFAULT):
+                 protocol_format=PgProtocolFormat._DEFAULT,
+                 codec_helper=None):
         self.database = database
         self.unix_socket_path = unix_socket_path
         self.host = host
@@ -53,10 +56,14 @@ class Connection:
         self.ssl = ssl
         self.protocol_format = PgProtocolFormat.convert(protocol_format)
 
+        # this will be set when the _run method returns (the
+        # set_event_when_done decorator takes care of that)
+        self.closed = trio.Event()
+
         self.current_transaction = None
 
         self._stream = None
-        self._codec_helper = CodecHelper()
+        self._codec_helper = codec_helper or CodecHelper()
 
         self._nursery = None
         self._server_vars = {}
@@ -76,7 +83,7 @@ class Connection:
         self._is_ready = False
         self._is_ready_cv = trio.Condition()
 
-        self._run_send_finished = False
+        self._run_send_finished = trio.Event()
 
         # these channels are used to communicate data to be sent to
         # the back-end to the _run_send task
@@ -90,12 +97,15 @@ class Connection:
         # this is set when we receive AuthenticationOk from postgres
         self._auth_ok = trio.Event()
 
-        # this is set by the close() method
-        self._closed = trio.Event()
+        # this is set by the close() method to signal the connection
+        # must be closed
+        self._start_closing = trio.Event()
 
         # this is set when postgres type info is loaded from the
         # pg_catalog.pg_type table
         self._pg_types_loaded = trio.Event()
+        if self._codec_helper.initialized:
+            self._pg_types_loaded.set()
 
     @property
     def server_vars(self):
@@ -117,7 +127,7 @@ class Connection:
         self._codec_helper.register_codec(codec)
 
     async def execute(self, query, *params):
-        if self._closed.is_set():
+        if self._start_closing.is_set():
             raise ProgrammingError('Connection is closed.')
 
         if not self._pg_types_loaded.is_set():
@@ -142,7 +152,7 @@ class Connection:
         return results
 
     def close(self):
-        self._closed.set()
+        self._start_closing.set()
 
     def transaction(self, isolation_level=None, read_write_mode=None,
                     deferrable=False):
@@ -191,6 +201,7 @@ class Connection:
 
         return results
 
+    @set_event_when_done('closed')
     async def _run(self):
         await self._connect()
 
@@ -203,17 +214,18 @@ class Connection:
             msg = _pgmsg.StartupMessage(self.username, self.database)
             await self._send_msg(msg)
 
-            nursery.start_soon(self._load_pg_types)
+            if not self._codec_helper.initialized:
+                nursery.start_soon(self._load_pg_types)
 
-            await self._closed.wait()
+            await self._start_closing.wait()
 
-            # Doing this before sending Terminate message makes sure
-            # there's no conflict with other tasks
-            nursery.cancel_scope.cancel()
+            # write None to outgoing channel to make run_send break
+            # out of the loop
+            await self._outgoing_send_chan.send(None)
 
-            # make sure _send_run is finished so we won't get an error
-            # by concurrently writing to the stream
-            await _self._run_send_finished.wait()
+            # make sure _send_run is actually finished so we won't get
+            # an error by concurrently writing to the stream
+            await self._run_send_finished.wait()
 
             # attempt a graceful shutdown by sending a Terminate
             # message, but we can't use self._send_msg because the
@@ -221,12 +233,16 @@ class Connection:
             msg = _pgmsg.Terminate()
             await self._stream.send_all(bytes(msg))
 
+            nursery.cancel_scope.cancel()
+
     async def _run_send(self):
         try:
             async for msg in self._outgoing_recv_chan:
+                if msg is None:
+                    break
                 await self._stream.send_all(bytes(msg))
         finally:
-            self._run_send_finished = True
+            self._run_send_finished.set()
 
     async def _run_recv(self):
         buf = b''
@@ -527,6 +543,7 @@ async def connect(*args, **kwargs):
             while not conn._is_ready:
                 await conn._is_ready_cv.wait()
 
-        yield conn
-
-        conn.close()
+        try:
+            yield conn
+        finally:
+            conn.close()

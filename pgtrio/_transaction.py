@@ -77,7 +77,7 @@ class Transaction:
             # return True to signify we've handled the exception
             return True
 
-        if not self.conn._closed.is_set():
+        if not self.conn.closed.is_set():
             if extype is None:
                 await self._commit()
             else:

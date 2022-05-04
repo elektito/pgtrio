@@ -30,6 +30,8 @@ def register_builtin_codec(codec):
 
 class CodecHelper:
     def __init__(self):
+        self.initialized = False
+
         self._codecs = builtin_codecs
         self._oid_to_name = {}
         self._type_name_to_codec = {}
@@ -42,6 +44,7 @@ class CodecHelper:
             oid = int(oid.decode('ascii'))
             if name in self._codecs:
                 self.enable_codec(name, oid)
+        self.initialized = True
 
     def enable_codec(self, type_name, type_oid):
         self._oid_to_name[type_oid] = type_name
