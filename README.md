@@ -1,8 +1,10 @@
 # pgtrio
 
 This is a [Trio][1]-native PostgreSQL interface library. It implements
-the PostgreSQL wire protocol (both text and binary) in pure Python, so
-it's likely not the best performing interface library out there.
+the PostgreSQL wire protocol (both text and binary) in pure Python. It
+automatically converts between common postgres/python types, and
+supports adding custom codecs for other types. Transactions, cursors,
+and prepared statements are also supported.
 
 Minimum Python version supported is 3.8.
 
@@ -183,6 +185,17 @@ python/postgres types:
 | timestamp     | datetime.datetime       |
 | timestamptz   | datetime.datetime       |
 | varchar       | str                     |
+
+## Development
+
+You can install development dependencies by setting up a virtualenv
+(for example by `python3 -m venv venv && . venv/bin/activate`) and
+running `pip install -r requirements.txt`.
+
+You can run unit tests by running `python -m pytest` inside a properly
+setup virtualenv. Notice however that the tests currently only support
+Linux and need postgres executables at a well-known location
+(`/usr/lib/postgresql`).
 
 
 [1]: https://github.com/python-trio/trio
