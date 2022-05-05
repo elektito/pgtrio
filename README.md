@@ -13,6 +13,10 @@ Minimum Python version supported is 3.8.
 
 ## Usage
 
+You can install pgtrio from pypi:
+
+    pip install pgtrio
+
 To use pgtrio, you either start by calling the `connect` function or
 the `create_pool`. The former returns a single `Connection` object
 while the latter returns a `Pool` object that can be used to acquire
