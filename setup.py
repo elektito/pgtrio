@@ -7,6 +7,8 @@ with open('pgtrio/_version.py') as f:
 test_dependencies = [
     'pytest==7.1.1',
     'pytest-trio==0.7.0',
+    'coverage==6.3.2',
+    'coverage-badge==1.1.0',
 ]
 
 dev_dependencies = test_dependencies + [
