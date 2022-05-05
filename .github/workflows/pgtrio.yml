@@ -40,7 +40,7 @@ jobs:
       run: |
         COVERAGE=$(coverage json -o- | jq '.totals.percent_covered | round')
         coverage-badge >coverage.svg
-    - name: Deploy
+    - name: Upload badge to gist
       uses: exuanbo/actions-deploy-gist@v1
       with:
         token: ${{ secrets.BADGE_GIST_TOKEN }}
