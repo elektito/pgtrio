@@ -3,7 +3,6 @@ from pytest import raises, mark
 from pgtrio import (
     PgIsolationLevel, PgReadWriteMode, InterfaceError, DatabaseError
 )
-from utils import postgres_socket_file, conn
 
 
 isolation_levels = [

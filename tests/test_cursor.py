@@ -1,5 +1,4 @@
 from pytest import raises
-from utils import postgres_socket_file, conn
 from pgtrio import ProgrammingError
 
 

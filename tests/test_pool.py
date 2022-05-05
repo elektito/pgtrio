@@ -1,7 +1,6 @@
 import trio
 import pgtrio
 from pytest import raises
-from utils import postgres_socket_file, pool
 
 
 async def test_simple(pool):

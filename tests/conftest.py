@@ -8,7 +8,7 @@ from pytest import fixture
 pg_ctl = None
 
 
-@fixture
+@fixture(scope='session')
 def postgres_socket_file():
     global pg_ctl
     if not pg_ctl:
@@ -134,12 +134,26 @@ async def conn(postgres_socket_file, request):
 
         yield conn
 
+    async with pgtrio.connect(
+            'postgres',
+            username=username,
+            protocol_format=fmt,
+            unix_socket_path=postgres_socket_file) as conn:
+        await conn.execute('drop database testdb')
+
 
 @fixture(params=['binary', 'text'])
 async def pool(postgres_socket_file, request):
     fmt = request.param
+
+    username = None
+    if os.getuid() == 0:
+        # no root role, so use postgres
+        username = 'postgres'
+
     async with pgtrio.connect(
             'postgres',
+            username=username,
             protocol_format=fmt,
             unix_socket_path=postgres_socket_file) as conn:
         await conn.execute('create database testdb')
@@ -154,6 +168,13 @@ async def pool(postgres_socket_file, request):
             pool_conn_init=conn_init,
             unix_socket_path=postgres_socket_file) as pool:
         yield pool
+
+    async with pgtrio.connect(
+            'postgres',
+            username=username,
+            protocol_format=fmt,
+            unix_socket_path=postgres_socket_file) as conn:
+        await conn.execute('drop database testdb')
 
 
 def find_pg_ctl():

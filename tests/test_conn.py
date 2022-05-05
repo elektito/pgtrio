@@ -6,7 +6,6 @@ from ipaddress import (
 )
 from datetime import datetime, date, time, timedelta, timezone
 from pytest import raises
-from utils import postgres_socket_file, conn
 
 
 async def test_null_char_in_query(conn):
