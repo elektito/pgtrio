@@ -214,6 +214,8 @@ class Connection:
             msg = _pgmsg.StartupMessage(self.username, self.database)
             await self._send_msg(msg)
 
+            await self._auth_ok.wait()
+
             if not self._codec_helper.initialized:
                 nursery.start_soon(self._load_pg_types)
 
