@@ -24,6 +24,7 @@ def postgres_socket_file():
             pg_ctl,
             'init',
             '-D', data_dir,
+            '-l', log_file,
         ]
         proc = subprocess.run(init_cmd, capture_output=True)
         if proc.returncode:
