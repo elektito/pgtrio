@@ -125,6 +125,7 @@ async def conn(postgres_socket_file, request):
             username=username,
             protocol_format=fmt,
             unix_socket_path=postgres_socket_file) as conn:
+        await cleanup_existing_test_db(conn)
         await conn.execute('create database testdb')
 
     async with pgtrio.connect(
@@ -137,13 +138,6 @@ async def conn(postgres_socket_file, request):
         conn._disable_owner_check = True
 
         yield conn
-
-    async with pgtrio.connect(
-            'postgres',
-            username=username,
-            protocol_format=fmt,
-            unix_socket_path=postgres_socket_file) as conn:
-        await conn.execute('drop database testdb')
 
 
 @fixture(params=['binary', 'text'])
@@ -160,6 +154,7 @@ async def pool(postgres_socket_file, request):
             username=username,
             protocol_format=fmt,
             unix_socket_path=postgres_socket_file) as conn:
+        await cleanup_existing_test_db(conn)
         await conn.execute('create database testdb')
 
     def conn_init(conn):
@@ -173,13 +168,6 @@ async def pool(postgres_socket_file, request):
             pool_conn_init=conn_init,
             unix_socket_path=postgres_socket_file) as pool:
         yield pool
-
-    async with pgtrio.connect(
-            'postgres',
-            username=username,
-            protocol_format=fmt,
-            unix_socket_path=postgres_socket_file) as conn:
-        await conn.execute('drop database testdb')
 
 
 def find_pg_ctl():
@@ -205,3 +193,12 @@ def find_pg_ctl():
             f'pg_ctl not found at the expected location: {pg_ctl}')
 
     return str(pg_ctl)
+
+
+async def cleanup_existing_test_db(conn):
+    results = await conn.execute(
+        "select 1 from pg_database where datname = 'testdb'")
+    if len(results) == 0:
+        return
+
+    await conn.execute('drop database testdb')
