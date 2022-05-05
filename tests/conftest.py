@@ -107,8 +107,10 @@ def postgres_socket_file():
 
             os.unlink(log_file)
 
-
-        os.unlink(log_file)
+        try:
+            os.unlink(log_file)
+        except FileNotFoundError:
+            pass
 
 
 @fixture(params=['binary', 'text'])
