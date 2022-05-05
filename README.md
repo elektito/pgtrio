@@ -1,3 +1,4 @@
+![Unit Tests](https://github.com/elektito/pgtrio/actions/workflows/pgtrio.yml/badge.svg)
 ![Coverage Badge](https://gist.githubusercontent.com/elektito/31aafc23e3119da1d39e1b9aaf5a43fd/raw/pgtrio-master-coverage.svg)
 
 # pgtrio
