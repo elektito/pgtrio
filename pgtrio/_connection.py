@@ -333,6 +333,10 @@ class Connection:
         return results
 
     async def _get_msg(self, *msg_types):
+        if self._incoming_recv_chan is None:
+            raise InternalError(
+                '_get_msg called before ReadyForRequest was received')
+
         async for msg in self._incoming_recv_chan:
             if type(msg) in msg_types:
                 return msg
@@ -437,13 +441,13 @@ class Connection:
                 'Unknown status value in ReadyForQuery message: '
                 f'{msg.status}')
 
-        self._is_ready = True
-        async with self._is_ready_cv:
-            self._is_ready_cv.notify_all()
-
         if not self._incoming_send_chan:
             self._incoming_send_chan, self._incoming_recv_chan = \
                 trio.open_memory_channel(0)
+
+        self._is_ready = True
+        async with self._is_ready_cv:
+            self._is_ready_cv.notify_all()
 
     async def _handle_msg_row_description(self, msg):
         self._row_desc = msg.fields
