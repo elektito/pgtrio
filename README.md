@@ -4,6 +4,8 @@ This is a [Trio][1]-native PostgreSQL interface library. It implements
 the PostgreSQL wire protocol (both text and binary) in pure Python, so
 it's likely not the best performing interface library out there.
 
+Minimum Python version supported is 3.8.
+
 ## Usage
 
 To use pgtrio, you either start by calling the `connect` function or
@@ -39,9 +41,10 @@ async def insert_rows(pool, start, end):
             results = await conn.execute('insert into numbers (n) values ($1)', i)
 
 async def main():
-    async with trio.open_nursery() as nursery:
-        nursery.start_soon(perform, pool, 0, 10)
-        nursery.start_soon(perform, pool, 10, 20)
+    async with pgtrio.create_pool('test') as pool:
+        async with trio.open_nursery() as nursery:
+            nursery.start_soon(insert_rows, pool, 0, 10)
+            nursery.start_soon(insert_rows, pool, 10, 20)
 
 trio.run(main)
 ```
@@ -63,8 +66,8 @@ import pgtrio
 async def main():
     async with pgtrio.connect('test') as conn:
         async with conn.transaction() as tr:
-            conn.execute("insert into users (name) values ('John Smith')")
-            conn.execute("insert into users (name) values ('Jane Smith')")
+            await conn.execute("insert into users (name) values ('John Smith')")
+            await conn.execute("insert into users (name) values ('Jane Smith')")
 
 trio.run(main)
 ```
@@ -109,9 +112,9 @@ async def main():
     async with pgtrio.connect('test') as conn:
         async with conn.transaction():
             cur = await conn.cursor('select * from users')
-            chunk1 = cur.fetch(100)
-            cur.forward(50)
-            chunk2 = cur.fetch(100)
+            chunk1 = await cur.fetch(100)
+            await cur.forward(50)
+            chunk2 = await cur.fetch(100)
 
 trio.run(main)
 ```
@@ -132,9 +135,9 @@ async def main():
         async with conn.transaction():
             stmt = await conn.prepare('select * from users')
             cur = await stmt.cursor()
-            chunk1 = cur.fetch(100)
-            cur.forward(50)
-            chunk2 = cur.fetch(100)
+            chunk1 = await cur.fetch(100)
+            await cur.forward(50)
+            chunk2 = await cur.fetch(100)
 
 trio.run(main)
 ```
@@ -149,7 +152,7 @@ import pgtrio
 async def main():
     async with pgtrio.connect('test') as conn:
         async with conn.transaction():
-            cur = await conn.cursor('select * from users')
+            cur = await conn.cursor('select name, dob from users')
             async for name, dob in cur:
                 print(name, dob)
 
