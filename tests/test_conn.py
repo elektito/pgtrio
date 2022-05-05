@@ -461,3 +461,15 @@ async def test_closed(conn):
     conn.close()
     with raises(pgtrio.ProgrammingError):
         await conn.execute('select 1')
+
+
+async def test_ownership(conn):
+    # this is set in the fixture, but now we flip it back for this
+    # test
+    conn._disable_owner_check = False
+
+    async def perform():
+        with raises(pgtrio.InterfaceError):
+            await conn.execute('select 1')
+    async with trio.open_nursery() as nursery:
+        nursery.start_soon(perform)

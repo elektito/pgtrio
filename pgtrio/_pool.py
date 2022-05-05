@@ -41,6 +41,7 @@ class Pool:
             conn = self._free_conns.pop()
             self._in_use_conns.append(conn)
 
+            conn._owner = trio.lowlevel.current_task()
             try:
                 yield conn
             finally:
