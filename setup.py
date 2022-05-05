@@ -1,5 +1,6 @@
 from setuptools import setup
 
+
 with open('pgtrio/_version.py') as f:
     exec(f.read())
 
@@ -25,6 +26,11 @@ setup(
     license='MIT',
     packages=['pgtrio'],
     zip_safe=False,
+    classifiers=[
+        "Programming Language :: Python :: 3",
+        "License :: OSI Approved :: MIT License",
+        "Operating System :: OS Independent",
+    ],
     install_requires=[
         'trio==0.20.0',
         'python-dateutil==2.8.2',
@@ -33,5 +39,5 @@ setup(
     extras_require={
         'test': test_dependencies,
         'dev': dev_dependencies,
-    }
+    },
 )
