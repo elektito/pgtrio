@@ -165,6 +165,7 @@ async def pool(postgres_socket_file, request):
 
     async with pgtrio.create_pool(
             'testdb',
+            username=username,
             pool_conn_init=conn_init,
             unix_socket_path=postgres_socket_file) as pool:
         yield pool
