@@ -231,7 +231,10 @@ class Connection:
             # message, but we can't use self._send_msg because the
             # send task is now canceled.
             msg = _pgmsg.Terminate()
-            await self._stream.send_all(bytes(msg))
+            try:
+                await self._stream.send_all(bytes(msg))
+            except trio.BrokenResourceError:
+                pass
 
             nursery.cancel_scope.cancel()
 
@@ -241,6 +244,8 @@ class Connection:
                 if msg is None:
                     break
                 await self._stream.send_all(bytes(msg))
+        except trio.BrokenResourceError:
+            raise OperationalError('Database connection broken')
         finally:
             self._run_send_finished.set()
 
@@ -249,6 +254,8 @@ class Connection:
         while True:
             try:
                 data = await self._stream.receive_some(BUFFER_SIZE)
+            except trio.BrokenResourceError:
+                raise OperationalError('Database connection broken')
             except trio.ClosedResourceError:
                 break
 
