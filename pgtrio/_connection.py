@@ -406,7 +406,7 @@ class Connection:
                 username=self.username,
                 salt=msg.salt,
             )
-            await self._stream.send_all(bytes(msg))
+            await self._send_msg(msg)
             return
 
     async def _handle_error(self, msg):
