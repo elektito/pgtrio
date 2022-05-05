@@ -26,7 +26,36 @@ def postgres_socket_file():
             '-D', data_dir,
             '-l', log_file,
         ]
-        proc = subprocess.run(init_cmd, capture_output=True)
+
+        sudo_prefix = []
+        if os.getuid() == 0:
+            # pg_ctl refuses to run as root
+
+            # make sure the log file is owned by the postgres user
+            chown_cmd = ['/bin/chown', 'postgres:postgres', data_dir, '-R']
+            proc = subprocess.run(chown_cmd, capture_output=True)
+            if proc.returncode:
+                raise RuntimeError(
+                    f'Could not chown the data directory '
+                    f'(exit code={proc.returncode})\n'
+                    f'stdout:\n{proc.stderr.decode()}\n\n'
+                    f'stderr:\n{proc.stderr.decode()}')
+
+            # make sure the log file is owned by the postgres user
+            chown_cmd = ['/bin/chown', 'postgres:postgres', log_file]
+            proc = subprocess.run(chown_cmd, capture_output=True)
+            if proc.returncode:
+                raise RuntimeError(
+                    f'Could not chown the log file '
+                    f'(exit code={proc.returncode})\n'
+                    f'stdout:\n{proc.stderr.decode()}\n\n'
+                    f'stderr:\n{proc.stderr.decode()}')
+
+            # run pg_ctl as the postgres user
+            sudo_prefix = ['sudo', '-u', 'postgres']
+
+        proc = subprocess.run(sudo_prefix + init_cmd,
+                              capture_output=True)
         if proc.returncode:
             raise RuntimeError(
                 f'Could not initilize a  PostgreSQL data directory '
@@ -47,7 +76,8 @@ def postgres_socket_file():
             '-o', pg_options,
         ]
 
-        proc = subprocess.run(start_cmd, capture_output=True)
+        proc = subprocess.run(sudo_prefix + start_cmd,
+                              capture_output=True)
         if proc.returncode:
             raise RuntimeError(
                 f'Could not start PostgreSQL (exit code='
@@ -66,7 +96,8 @@ def postgres_socket_file():
             '-o', pg_options,
         ]
 
-        proc = subprocess.run(stop_cmd, capture_output=True)
+        proc = subprocess.run(sudo_prefix + stop_cmd,
+                              capture_output=True)
         if proc.returncode:
             raise RuntimeError(
                 f'Could not stop PostgreSQL (exit code='
@@ -79,14 +110,22 @@ def postgres_socket_file():
 @fixture(params=['binary', 'text'])
 async def conn(postgres_socket_file, request):
     fmt = request.param
+
+    username = None
+    if os.getuid() == 0:
+        # no root role, so use postgres
+        username = 'postgres'
+
     async with pgtrio.connect(
             'postgres',
+            username=username,
             protocol_format=fmt,
             unix_socket_path=postgres_socket_file) as conn:
         await conn.execute('create database testdb')
 
     async with pgtrio.connect(
             'testdb',
+            username=username,
             unix_socket_path=postgres_socket_file) as conn:
 
         # owner check won't work in tests, because fixtures are not
