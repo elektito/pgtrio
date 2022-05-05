@@ -142,6 +142,10 @@ class CodecMetaclass(type):
                 raise TypeError(
                     f'Codec class python_types field should either be '
                     f'a tuple or a type; Got "{klass.python_types}"')
+            if not all(isinstance(t, type) for t in klass.python_types):
+                raise TypeError(
+                    f'Codec class python_types field should contain '
+                    f'only types; Got: {klass.python_types}')
 
         expected_methods = [
             'decode_text',

@@ -1,6 +1,7 @@
 from ipaddress import ip_address, ip_network
 from datetime import datetime, date, time, timedelta, timezone
-from pgtrio import _codecs
+from pytest import raises
+from pgtrio import _codecs, Codec
 
 
 def _test_codec(codec, test_values):
@@ -132,3 +133,249 @@ def test_timetz():
         time(0, 0, 1, tzinfo=timezone(timedelta(hours=2))),
         time(18, 19, 44, tzinfo=timezone(timedelta(hours=2))),
     ])
+
+
+def test_custom_class_ok():
+    class FooCodec(Codec):
+        pg_type = 'int4'
+        python_types = int
+
+        @classmethod
+        def decode_text(cls, value):
+            return 10
+
+        @classmethod
+        def decode_binary(cls, value):
+            return 20
+
+        @classmethod
+        def encode_text(cls, value):
+            return b''
+
+        @classmethod
+        def encode_binary(cls, value):
+            return b''
+
+    assert FooCodec.decode_text(b'foo') == 10
+    assert FooCodec.decode_binary(b'bar') == 20
+
+
+def test_custom_class_multiple_python_types():
+    class FooCodec(Codec):
+        pg_type = 'json'
+        python_types = [dict, list]
+
+        @classmethod
+        def decode_text(cls, value):
+            pass
+
+        @classmethod
+        def decode_binary(cls, value):
+            pass
+
+        @classmethod
+        def encode_text(cls, value):
+            pass
+
+        @classmethod
+        def encode_binary(cls, value):
+            pass
+
+
+def test_custom_class_no_pg_type():
+    with raises(TypeError):
+        class FooCodec(Codec):
+            python_types = [int]
+
+
+def test_custom_class_no_python_types():
+    with raises(TypeError):
+        class FooCodec(Codec):
+            pg_type = 'int4'
+
+
+def test_custom_class_invalid_python_types1():
+    with raises(TypeError):
+        class FooCodec(Codec):
+            pg_type = 'int4'
+            python_types = 'int'
+
+
+def test_custom_class_invalid_python_types2():
+    with raises(TypeError):
+        class FooCodec(Codec):
+            pg_type = 'json'
+            python_types = ['list', 'dict']
+
+            @classmethod
+            def decode_text(cls, value):
+                pass
+
+            @classmethod
+            def decode_binary(cls, value):
+                pass
+
+            @classmethod
+            def encode_text(cls, value):
+                pass
+
+            @classmethod
+            def encode_binary(cls, value):
+                pass
+
+
+def test_custom_class_invalid_pg_type():
+    with raises(TypeError):
+        class FooCodec(Codec):
+            pg_type = 1
+            python_types = 'int'
+
+
+def test_custom_class_invalid_decode_text_arg():
+    class FooCodec(Codec):
+        pg_type = 'json'
+        python_types = [dict, list]
+
+        @classmethod
+        def decode_text(cls, value):
+            return {}
+
+        @classmethod
+        def decode_binary(cls, value):
+            return  []
+
+        @classmethod
+        def encode_text(cls, value):
+            return b''
+
+        @classmethod
+        def encode_binary(cls, value):
+            return b''
+
+    with raises(TypeError):
+        FooCodec.decode_text('foo')
+
+
+def test_custom_class_invalid_decode_binary_arg():
+    class FooCodec(Codec):
+        pg_type = 'json'
+        python_types = [dict, list]
+
+        @classmethod
+        def decode_text(cls, value):
+            return {}
+
+        @classmethod
+        def decode_binary(cls, value):
+            return  []
+
+        @classmethod
+        def encode_text(cls, value):
+            return b''
+
+        @classmethod
+        def encode_binary(cls, value):
+            return b''
+
+    with raises(TypeError):
+        FooCodec.decode_binary('foo')
+
+
+def test_custom_class_invalid_encode_text_ret():
+    class FooCodec(Codec):
+        pg_type = 'json'
+        python_types = [dict, list]
+
+        @classmethod
+        def decode_text(cls, value):
+            return {}
+
+        @classmethod
+        def decode_binary(cls, value):
+            return  []
+
+        @classmethod
+        def encode_text(cls, value):
+            return ''
+
+        @classmethod
+        def encode_binary(cls, value):
+            return b''
+
+    with raises(TypeError):
+        FooCodec.encode_text({})
+
+
+def test_custom_class_invalid_encode_binary_ret():
+    class FooCodec(Codec):
+        pg_type = 'json'
+        python_types = [dict, list]
+
+        @classmethod
+        def decode_text(cls, value):
+            return {}
+
+        @classmethod
+        def decode_binary(cls, value):
+            return  []
+
+        @classmethod
+        def encode_text(cls, value):
+            return b''
+
+        @classmethod
+        def encode_binary(cls, value):
+            return ''
+
+    with raises(TypeError):
+        FooCodec.encode_binary([])
+
+
+def test_custom_class_invalid_encode_text_arg():
+    class FooCodec(Codec):
+        pg_type = 'json'
+        python_types = [dict, list]
+
+        @classmethod
+        def decode_text(cls, value):
+            return {}
+
+        @classmethod
+        def decode_binary(cls, value):
+            return  []
+
+        @classmethod
+        def encode_text(cls, value):
+            return b''
+
+        @classmethod
+        def encode_binary(cls, value):
+            return ''
+
+    with raises(TypeError):
+        FooCodec.encode_text(1)
+
+
+def test_custom_class_invalid_encode_binary_arg():
+    class FooCodec(Codec):
+        pg_type = 'json'
+        python_types = [dict, list]
+
+        @classmethod
+        def decode_text(cls, value):
+            return {}
+
+        @classmethod
+        def decode_binary(cls, value):
+            return  []
+
+        @classmethod
+        def encode_text(cls, value):
+            return b''
+
+        @classmethod
+        def encode_binary(cls, value):
+            return ''
+
+    with raises(TypeError):
+        FooCodec.encode_binary(1)
