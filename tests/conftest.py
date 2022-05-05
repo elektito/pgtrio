@@ -85,24 +85,28 @@ def postgres_socket_file():
                 f'\nstdout:\n{proc.stdout.decode()}\n\n'
                 f'stderr:\n{proc.stderr.decode()}')
 
-        yield f'{data_dir}/.s.PGSQL.5432'
+        try:
+            yield f'{data_dir}/.s.PGSQL.5432'
+        finally:
+            stop_cmd = [
+                pg_ctl,
+                '-D', data_dir,
+                '-l', log_file,
+                '-m', 'immediate',
+                'stop',
+                '-o', pg_options,
+            ]
 
-        stop_cmd = [
-            pg_ctl,
-            '-D', data_dir,
-            '-l', log_file,
-            '-m', 'immediate',
-            'stop',
-            '-o', pg_options,
-        ]
+            proc = subprocess.run(sudo_prefix + stop_cmd,
+                                  capture_output=True)
+            if proc.returncode:
+                raise RuntimeError(
+                    f'Could not stop PostgreSQL (exit code='
+                    f'{proc.returncode}).\nstdout:\n{proc.stdout.decode()}'
+                    f'\n\nstderr:\n{proc.stderr.decode()}')
 
-        proc = subprocess.run(sudo_prefix + stop_cmd,
-                              capture_output=True)
-        if proc.returncode:
-            raise RuntimeError(
-                f'Could not stop PostgreSQL (exit code='
-                f'{proc.returncode}).\nstdout:\n{proc.stdout.decode()}'
-                f'\n\nstderr:\n{proc.stderr.decode()}')
+            os.unlink(log_file)
+
 
         os.unlink(log_file)
 
