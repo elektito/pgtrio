@@ -1,6 +1,6 @@
 from collections import namedtuple
 from . import _pgmsg
-from ._utils import get_exc_from_msg
+from ._utils import get_exc_from_msg, get_rowcount
 from ._exceptions import ProgrammingError, InterfaceError
 from ._transaction import Transaction
 from ._cursor import Cursor
@@ -225,11 +225,7 @@ class PreparedStatement:
                 should_close = True
                 break
             elif isinstance(msg, _pgmsg.CommandComplete):
-                if msg.cmd_tag.startswith(b'SELECT'):
-                    _, rows = msg.cmd_tag.split(b' ')
-                    self._query_row_count = int(rows.decode('ascii'))
-                else:
-                    self._query_row_count = None
+                self._query_row_count = get_rowcount(msg)
                 should_close = True
                 break
             elif isinstance(msg, _pgmsg.PortalSuspended):

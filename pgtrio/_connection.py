@@ -8,7 +8,8 @@ from collections import defaultdict
 from . import _pgmsg
 from ._codecs import CodecHelper
 from ._utils import (
-    PgProtocolFormat, get_exc_from_msg, set_event_when_done
+    PgProtocolFormat, get_exc_from_msg, set_event_when_done,
+    get_rowcount,
 )
 from ._transaction import Transaction
 from ._prepared_stmt import PreparedStatement
@@ -330,11 +331,7 @@ class Connection:
             elif isinstance(msg, _pgmsg.RowDescription):
                 row_desc = msg.fields
             elif isinstance(msg, _pgmsg.CommandComplete):
-                if msg.cmd_tag.startswith(b'SELECT'):
-                    _, rows = msg.cmd_tag.split(b' ')
-                    self._query_row_count = int(rows.decode('ascii'))
-                else:
-                    self._query_row_count = None
+                self._query_row_count = get_rowcount(msg)
                 break
             else:
                 assert False

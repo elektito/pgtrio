@@ -472,3 +472,11 @@ async def test_ownership(conn):
             await conn.execute('select 1')
     async with trio.open_nursery() as nursery:
         nursery.start_soon(perform)
+
+
+async def test_rowcount(conn):
+    await conn.execute('create table foobar (foo int)')
+    await conn.execute('insert into foobar (foo) values (10), (20), (30)')
+    assert conn.rowcount == 3
+    await conn.execute('update foobar set foo = foobar.foo + 1 where foo >= 20')
+    assert conn.rowcount == 2

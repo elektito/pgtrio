@@ -2,6 +2,7 @@ import inspect
 from enum import IntEnum, Enum
 from functools import wraps
 from ._exceptions import DatabaseError
+from . import _pgmsg
 
 
 class PgProtocolFormat(IntEnum):
@@ -84,3 +85,23 @@ def set_event_when_done(event_name):
             return sync_wrapper
 
     return decorator
+
+
+def get_rowcount(msg):
+    """Parses a CommandComplete message and returns a rowcount value in it
+(if any)"""
+    assert isinstance(msg, _pgmsg.CommandComplete)
+
+    if msg.cmd_tag.startswith(b'SELECT'):
+        _, rows = msg.cmd_tag.split(b' ')
+        rows = int(rows.decode('ascii'))
+    elif msg.cmd_tag.startswith(b'INSERT'):
+        _, _, rows = msg.cmd_tag.split(b' ')
+        rows = int(rows.decode('ascii'))
+    elif msg.cmd_tag.startswith(b'UPDATE'):
+        _, rows = msg.cmd_tag.split(b' ')
+        rows = int(rows.decode('ascii'))
+    else:
+        rows = None
+
+    return rows
