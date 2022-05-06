@@ -241,6 +241,12 @@ class _Int(Codec):
 
     @classmethod
     def encode_text(cls, value):
+        bits = cls._int_length * 8
+        min_value = -(2 ** (bits - 1))
+        max_value = 2 ** (bits - 1) - 1
+        if value < min_value or value > max_value:
+            raise OverflowError(
+                f'Value {value} out of range for {cls.__name__}')
         return str(value).encode('ascii')
 
     @classmethod
