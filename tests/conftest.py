@@ -133,6 +133,7 @@ async def conn(postgres_socket_file, request):
     async with pgtrio.connect(
             'testdb',
             username=username,
+            protocol_format=fmt,
             unix_socket_path=postgres_socket_file) as conn:
 
         # owner check won't work in tests, because fixtures are not
@@ -167,6 +168,7 @@ async def pool(postgres_socket_file, request):
     async with pgtrio.create_pool(
             'testdb',
             username=username,
+            protocol_format=fmt,
             pool_conn_init=conn_init,
             unix_socket_path=postgres_socket_file) as pool:
         yield pool
