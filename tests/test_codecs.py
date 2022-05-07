@@ -150,13 +150,13 @@ def test_custom_class_ok():
 
         @classmethod
         def encode_text(cls, value):
-            return b''
+            return ''
 
         @classmethod
         def encode_binary(cls, value):
             return b''
 
-    assert FooCodec.decode_text(b'foo') == 10
+    assert FooCodec.decode_text('foo') == 10
     assert FooCodec.decode_binary(b'bar') == 20
 
 
@@ -253,7 +253,7 @@ def test_custom_class_invalid_decode_text_arg():
             return b''
 
     with raises(TypeError):
-        FooCodec.decode_text('foo')
+        FooCodec.decode_text(100)
 
 
 def test_custom_class_invalid_decode_binary_arg():
@@ -296,7 +296,7 @@ def test_custom_class_invalid_encode_text_ret():
 
         @classmethod
         def encode_text(cls, value):
-            return ''
+            return 100
 
         @classmethod
         def encode_binary(cls, value):

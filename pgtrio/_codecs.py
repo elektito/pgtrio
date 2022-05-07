@@ -76,7 +76,7 @@ class CodecHelper:
                 f'"{type_name}"')
 
         if protocol_format == PgProtocolFormat.TEXT:
-            return codec.encode_text(value)
+            return codec.encode_text(value).encode('utf-8')
         else:
             return codec.encode_binary(value)
 
@@ -197,27 +197,40 @@ class CodecMetaclass(type):
                         f'type "{pg_type_name}"; Got: {value!r}')
 
             result = method(value, *args, **kwargs)
-            if not isinstance(result, bytes):
-                raise TypeError(
-                    f'Codec {codec_class.__name__} {method.__name__} '
-                    f'method did not return a bytes value; Got: '
-                    f'{result!r}')
+            if method.__name__ == 'encode_binary':
+                if not isinstance(result, bytes):
+                    raise TypeError(
+                        f'Codec {codec_class.__name__} '
+                        '{method.__name__} method did not return a '
+                        f'bytes value; Got: {result!r}')
+            else:
+                if not isinstance(result, str):
+                    raise TypeError(
+                        f'Codec {codec_class.__name__} '
+                        '{method.__name__} method did not return a '
+                        f'string value; Got: {result!r}')
             return result
 
         @wraps(method)
         def decode_wrapper(value, *args, **kwargs):
-            if not isinstance(value, bytes):
-                raise TypeError(
-                    f'{method.__name__} expects a bytes value')
-            result = method(value, *args, **kwargs)
-            if method.__name__.startswith('decode_'):
-                if not isinstance(result, types):
-                    expected_types = \
-                        f'[{", ".join(t.__name__ for t in types)}]'
+            if method.__name__ == 'decode_binary':
+                if not isinstance(value, (bytes, memoryview)):
                     raise TypeError(
-                        f'Codec {codec_class.__name__} returned an '
-                        f'invalid decoded value; Expected types: '
-                        f'{expected_types}, Got: {result!r}')
+                        f'decode_binary expects a bytes value; '
+                        f'Got: {value!r}')
+            else:
+                if not isinstance(value, str):
+                    raise TypeError(
+                        f'decode_text expects a string value; '
+                        f'Got: {value!r}')
+            result = method(value, *args, **kwargs)
+            if not isinstance(result, types):
+                expected_types = \
+                    f'[{", ".join(t.__name__ for t in types)}]'
+                raise TypeError(
+                    f'Codec {codec_class.__name__} returned an '
+                    f'invalid decoded value; Expected types: '
+                    f'{expected_types}, Got: {result!r}')
             return result
 
         if method.__name__.startswith('decode_'):
@@ -233,7 +246,7 @@ class Codec(metaclass=CodecMetaclass):
 class _Int(Codec):
     @classmethod
     def decode_text(cls, value):
-        return int(value.decode('ascii'))
+        return int(value)
 
     @classmethod
     def decode_binary(cls, value):
@@ -247,7 +260,7 @@ class _Int(Codec):
         if value < min_value or value > max_value:
             raise OverflowError(
                 f'Value {value} out of range for {cls.__name__}')
-        return str(value).encode('ascii')
+        return str(value)
 
     @classmethod
     def encode_binary(cls, value):
@@ -284,7 +297,7 @@ class Bool(Codec):
 
     @classmethod
     def decode_text(cls, value):
-        return value == b't'
+        return value == 't'
 
     @classmethod
     def decode_binary(cls, value):
@@ -292,7 +305,7 @@ class Bool(Codec):
 
     @classmethod
     def encode_text(cls, value):
-        return b't' if value else b'f'
+        return 't' if value else 'f'
 
     @classmethod
     def encode_binary(cls, value):
@@ -306,8 +319,8 @@ class ByteA(Codec):
 
     @classmethod
     def decode_text(cls, value):
-        assert value.startswith(b'\\x')
-        return bytes.fromhex(value[2:].decode('ascii'))
+        assert value.startswith('\\x')
+        return bytes.fromhex(value[2:])
 
     @classmethod
     def decode_binary(cls, value):
@@ -315,7 +328,7 @@ class ByteA(Codec):
 
     @classmethod
     def encode_text(cls, value):
-        return b'\\x' + value.hex().encode('ascii')
+        return '\\x' + value.hex()
 
     @classmethod
     def encode_binary(cls, value):
@@ -329,7 +342,7 @@ class Text(Codec):
 
     @classmethod
     def decode_text(cls, value):
-        return value.decode('utf-8')
+        return value
 
     @classmethod
     def decode_binary(cls, value):
@@ -337,7 +350,7 @@ class Text(Codec):
 
     @classmethod
     def encode_text(cls, value):
-        return value.encode('utf-8')
+        return value
 
     @classmethod
     def encode_binary(cls, value):
@@ -359,7 +372,7 @@ class Json(Codec):
 
     @classmethod
     def encode_text(cls, value):
-        return orjson.dumps(value)
+        return orjson.dumps(value).decode('utf-8')
 
     @classmethod
     def encode_binary(cls, value):
@@ -386,7 +399,7 @@ class Jsonb(Codec):
 
     @classmethod
     def encode_text(cls, value):
-        return orjson.dumps(value)
+        return orjson.dumps(value).decode('utf-8')
 
     @classmethod
     def encode_binary(cls, value):
@@ -400,7 +413,7 @@ class Float4(Codec):
 
     @classmethod
     def decode_text(cls, value):
-        return float(value.decode('ascii'))
+        return float(value)
 
     @classmethod
     def decode_binary(cls, value):
@@ -409,7 +422,7 @@ class Float4(Codec):
 
     @classmethod
     def encode_text(cls, value):
-        return str(value).encode('ascii')
+        return str(value)
 
     @classmethod
     def encode_binary(cls, value):
@@ -423,7 +436,7 @@ class Float8(Codec):
 
     @classmethod
     def decode_text(cls, value):
-        return float(value.decode('ascii'))
+        return float(value)
 
     @classmethod
     def decode_binary(cls, value):
@@ -432,7 +445,7 @@ class Float8(Codec):
 
     @classmethod
     def encode_text(cls, value):
-        return str(value).encode('ascii')
+        return str(value)
 
     @classmethod
     def encode_binary(cls, value):
@@ -446,7 +459,7 @@ class Inet(Codec):
 
     @classmethod
     def decode_text(cls, value):
-        return ip_address(value.decode('ascii'))
+        return ip_address(value)
 
     @classmethod
     def decode_binary(cls, value):
@@ -454,7 +467,7 @@ class Inet(Codec):
 
     @classmethod
     def encode_text(cls, value):
-        return str(value).encode('ascii')
+        return str(value)
 
     @classmethod
     def encode_binary(cls, value):
@@ -468,7 +481,7 @@ class Cidr(Codec):
 
     @classmethod
     def decode_text(cls, value):
-        return ip_network(value.decode('ascii'))
+        return ip_network(value)
 
     @classmethod
     def decode_binary(cls, value):
@@ -476,7 +489,7 @@ class Cidr(Codec):
 
     @classmethod
     def encode_text(cls, value):
-        return str(value).encode('ascii')
+        return str(value)
 
     @classmethod
     def encode_binary(cls, value):
@@ -490,7 +503,7 @@ class Char(Codec):
 
     @classmethod
     def decode_text(cls, value):
-        return value.decode('utf-8')
+        return value
 
     @classmethod
     def decode_binary(cls, value):
@@ -498,7 +511,7 @@ class Char(Codec):
 
     @classmethod
     def encode_text(cls, value):
-        return value[0].encode('utf-8')
+        return value[0]
 
     @classmethod
     def encode_binary(cls, value):
@@ -512,7 +525,7 @@ class Varchar(Codec):
 
     @classmethod
     def decode_text(cls, value):
-        return value.decode('utf-8')
+        return value
 
     @classmethod
     def decode_binary(cls, value):
@@ -520,7 +533,7 @@ class Varchar(Codec):
 
     @classmethod
     def encode_text(cls, value):
-        return value.encode('utf-8')
+        return value
 
     @classmethod
     def encode_binary(cls, value):
@@ -534,7 +547,7 @@ class Date(Codec):
 
     @classmethod
     def decode_text(cls, value):
-        return dateutil.parser.parse(value.decode('ascii')).date()
+        return dateutil.parser.parse(value).date()
 
     @classmethod
     def decode_binary(cls, value):
@@ -543,7 +556,7 @@ class Date(Codec):
 
     @classmethod
     def encode_text(cls, value):
-        return value.isoformat().encode('ascii')
+        return value.isoformat()
 
     @classmethod
     def encode_binary(cls, value):
@@ -561,7 +574,7 @@ class Time(Codec):
 
     @classmethod
     def decode_text(cls, value):
-        return dateutil.parser.parse(value.decode('ascii')).time()
+        return dateutil.parser.parse(value).time()
 
     @classmethod
     def decode_binary(cls, value):
@@ -573,7 +586,7 @@ class Time(Codec):
 
     @classmethod
     def encode_text(cls, value):
-        return value.isoformat().encode('ascii')
+        return value.isoformat()
 
     @classmethod
     def encode_binary(cls, value):
@@ -593,7 +606,7 @@ class DateTime(Codec):
 
     @classmethod
     def decode_text(cls, value):
-        return dateutil.parser.isoparse(value.decode('ascii'))
+        return dateutil.parser.isoparse(value)
 
     @classmethod
     def decode_binary(cls, value):
@@ -602,7 +615,7 @@ class DateTime(Codec):
 
     @classmethod
     def encode_text(cls, value):
-        return value.isoformat().encode('ascii')
+        return value.isoformat()
 
     @classmethod
     def encode_binary(cls, value):
@@ -617,7 +630,7 @@ class DateTimeTz(Codec):
 
     @classmethod
     def decode_text(cls, value):
-        return dateutil.parser.isoparse(value.decode('ascii'))
+        return dateutil.parser.isoparse(value)
 
     @classmethod
     def decode_binary(cls, value):
@@ -627,7 +640,7 @@ class DateTimeTz(Codec):
 
     @classmethod
     def encode_text(cls, value):
-        return value.isoformat().encode('ascii')
+        return value.isoformat()
 
     @classmethod
     def encode_binary(cls, value):
@@ -643,7 +656,7 @@ class Interval(Codec):
 
     @classmethod
     def decode_text(cls, value):
-        value = value.decode('ascii')
+        value = value
 
         m = interval_re.match(value)
         groups = m.groupdict()
@@ -724,7 +737,7 @@ class Interval(Codec):
             time += f'{seconds}S'
 
         iso_duration = 'P' + date + time
-        return iso_duration.encode('ascii')
+        return iso_duration
 
     @classmethod
     def encode_binary(cls, value):
@@ -754,7 +767,7 @@ class TimeTz(Codec):
 
     @classmethod
     def decode_text(cls, value):
-        return dateutil.parser.parse(value.decode('ascii')).timetz()
+        return dateutil.parser.parse(value).timetz()
 
     @classmethod
     def decode_binary(cls, value):
@@ -788,7 +801,7 @@ class TimeTz(Codec):
 
     @classmethod
     def encode_text(cls, value):
-        return value.isoformat().encode('ascii')
+        return value.isoformat()
 
     @classmethod
     def encode_binary(cls, value):
