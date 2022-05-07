@@ -5,6 +5,7 @@ from enum import Enum
 from contextlib import asynccontextmanager
 from functools import wraps
 from collections import defaultdict
+from urllib.parse import urlparse
 from . import _pgmsg
 from ._codecs import CodecHelper
 from ._utils import (
@@ -545,8 +546,22 @@ class Connection:
 
 @asynccontextmanager
 @wraps(Connection)
-async def connect(*args, **kwargs):
-    conn = Connection(*args, **kwargs)
+async def connect(database, *args, **kwargs):
+    if '://' in database:
+        url = urlparse(database)
+        if url.scheme != 'postgresql':
+            raise ValueError('Database URL scheme should be "postgresql"')
+        if not url.path:
+            raise ValueError('No database name in database URL')
+        assert url.path.startswith('/')
+        database = url.path[1:]
+
+        kwargs['host'] = url.hostname
+        kwargs['port'] = url.port
+        kwargs['username'] = url.username
+        kwargs['password'] = url.password
+
+    conn = Connection(database, *args, **kwargs)
     async with trio.open_nursery() as nursery:
         nursery.start_soon(conn._run)
 
