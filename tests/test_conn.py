@@ -480,3 +480,134 @@ async def test_rowcount(conn):
     assert conn.rowcount == 3
     await conn.execute('update foobar set foo = foobar.foo + 1 where foo >= 20')
     assert conn.rowcount == 2
+
+
+async def test_array(conn):
+    await conn.execute('create table foobar (foo int[])')
+    await conn.execute(
+        "insert into foobar (foo) values ('{1,2,3}'::int[])")
+    results = await conn.execute('select * from foobar')
+    assert results == [([1, 2, 3],)]
+
+
+async def test_array_with_quote(conn):
+    await conn.execute('create table foobar (foo text[])')
+    await conn.execute(
+        r'''
+        insert into foobar (foo)
+        values ('{"foo", "aaa\"aaa"}'::text[])
+        '''
+    )
+    results = await conn.execute('select * from foobar')
+    assert results == [(['foo', 'aaa"aaa'],)]
+
+
+async def test_array_empty(conn):
+    await conn.execute('create table foobar (foo int[])')
+    await conn.execute(
+        "insert into foobar (foo) values ('{}'::int[])")
+    results = await conn.execute('select * from foobar')
+    assert results == [([],)]
+
+
+async def test_array_multidim1(conn):
+    await conn.execute('create table foobar (foo int[][])')
+    await conn.execute(
+        "insert into foobar (foo) values ('{{1,2,3},{4,5,6}}'::int[])")
+    results = await conn.execute('select * from foobar')
+    assert results == [([[1, 2, 3], [4, 5, 6]],)]
+
+
+async def test_array_multidim2(conn):
+    results = await conn.execute(
+        "select "
+        "'{{{1,2},{3,4},{5,6}},{{7,8},{9,10},{11,12}}}'::int[][][]")
+    assert results == [
+        ([[[1, 2], [3, 4], [5,6]], [[7, 8], [9, 10], [11, 12]]],)
+    ]
+
+async def test_array_multidim3(conn):
+    results = await conn.execute(
+        "select '{{{{1,2},{3,4},{5,6}}}}'::int[]")
+    assert results == [
+        ([[[[1, 2], [3, 4], [5, 6]]]],)
+    ]
+
+
+async def test_array_non_list(conn):
+    await conn.execute('create table foobar (foo int[])')
+    with raises(TypeError):
+        await conn.execute(
+            'insert into foobar (foo) values ($1)', 10)
+
+async def test_array_dim_check1(conn):
+    await conn.execute('create table foobar (foo int[][])')
+    with raises(ValueError):
+        # sub arrays should be the same length
+        await conn.execute(
+            'insert into foobar (foo) values ($1)',
+            [[1, 2], [1]],
+        )
+
+async def test_array_dim_check2(conn):
+    await conn.execute('create table foobar (foo int[])')
+    with raises(ValueError):
+        await conn.execute(
+            'insert into foobar (foo) values ($1)',
+            [[[1, 2], [3, 4]], [5, 6]],
+        )
+
+
+async def test_array_dim_check3(conn):
+    await conn.execute('create table foobar (foo int[][])')
+    with raises(ValueError):
+        # sub arrays should be the same length; postgres would
+        # actually accept this (at least postgres 12), but it would
+        # then insert an empty array. probably a bug.
+        await conn.execute(
+            'insert into foobar (foo) values ($1)',
+            [[[1, 2]], [1]],
+        )
+
+async def test_array_dim_check4(conn):
+    await conn.execute('create table foobar (foo int[])')
+    with raises(ValueError):
+        # postgres does not accept empty sub-arrays
+        await conn.execute(
+            'insert into foobar (foo) values ($1)',
+            [[]],
+        )
+
+async def test_array_dim_check5(conn):
+    await conn.execute('create table foobar (foo int[][])')
+    with raises(ValueError):
+        # each level should either be all other arrays, or all
+        # non-array values
+        await conn.execute(
+            'insert into foobar (foo) values ($1)',
+            [1, [1,2]],
+        )
+
+async def test_array_insert(conn):
+    await conn.execute('create table foobar (foo int[])')
+    await conn.execute(
+        'insert into foobar (foo) values ($1)', [10, 20, 30])
+    results = await conn.execute('select * from foobar')
+    assert results == [([10, 20, 30],)]
+
+
+async def test_array_insert_empty(conn):
+    await conn.execute('create table foobar (foo int[])')
+    await conn.execute(
+        'insert into foobar (foo) values ($1)', [])
+    results = await conn.execute('select * from foobar')
+    assert results == [([],)]
+
+
+async def test_array_param(conn):
+    await conn.execute('create table foobar (foo int)')
+    await conn.execute('insert into foobar (foo) values (1), (2), (3)')
+    results = await conn.execute(
+        'select * from foobar where foo = any($1)',
+        [1, 3])
+    assert results == [(1,), (3,)]

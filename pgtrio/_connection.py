@@ -516,7 +516,7 @@ class Connection:
 
     async def _load_pg_types(self):
         results = await self._execute_simple(
-            'select typname, oid from pg_catalog.pg_type',
+            'select typname, oid, typarray from pg_catalog.pg_type',
             dont_decode_values=True,
             protocol_format=PgProtocolFormat.TEXT)
         self._codec_helper.init(results)

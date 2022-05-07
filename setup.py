@@ -37,6 +37,7 @@ setup(
         'trio==0.20.0',
         'python-dateutil==2.8.2',
         'orjson==3.6.8',
+        'parsimonious==0.9.0',
     ],
     extras_require={
         'test': test_dependencies,

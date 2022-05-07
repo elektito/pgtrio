@@ -10,8 +10,11 @@ from ipaddress import (
     IPv6Network,
 )
 from functools import wraps
-from ._exceptions import InterfaceError
-from ._utils import PgProtocolFormat
+from ._exceptions import InterfaceError, InternalError
+from ._utils import PgProtocolFormat, chunks
+from ._text_array import parse_text_array, ArrayParseError
+
+ARRAY_MAX_DIM = 6  # from postgresql/src/includes/c.h
 
 interval_re = re.compile(
     r'^(P((?P<years>[-\.\d]+?)Y)?((?P<months>[-\.\d]+?)M)?((?P<weeks>[-\.\d]+?)W)?((?P<days>[-\.\d]+?)D)?)?'
@@ -35,19 +38,22 @@ class CodecHelper:
         self._codecs = builtin_codecs
         self._oid_to_name = {}
         self._type_name_to_codec = {}
+        self._array_oid_to_oid = {}
 
     def init(self, pg_types):
-        for name, oid in pg_types:
+        for name, oid, array_oid in pg_types:
             # values passed to this message are un-decoded and in text
             # format (because we haven't initialized codecs yet).
             name = name.decode('ascii')
             oid = int(oid.decode('ascii'))
+            array_oid = int(array_oid.decode('ascii'))
             if name in self._codecs:
-                self.enable_codec(name, oid)
+                self.enable_codec(name, oid, array_oid)
         self.initialized = True
 
-    def enable_codec(self, type_name, type_oid):
+    def enable_codec(self, type_name, type_oid, array_oid):
         self._oid_to_name[type_oid] = type_name
+        self._array_oid_to_oid[array_oid] = type_oid
 
         for name, codec in self._codecs.items():
             if name == type_name:
@@ -65,6 +71,14 @@ class CodecHelper:
         if value is None:
             return None
 
+        if type_oid in self._array_oid_to_oid:
+            elem_oid = self._array_oid_to_oid[type_oid]
+            return self.encode_array(value, elem_oid, protocol_format)
+
+        return self.encode_single_value(
+            value, type_oid, protocol_format)
+
+    def encode_single_value(self, value, type_oid, protocol_format):
         type_name = self._oid_to_name.get(type_oid)
         if type_name is None:
             raise InterfaceError(f'Uknown type OID: {type_oid}')
@@ -79,6 +93,99 @@ class CodecHelper:
             return codec.encode_text(value).encode('utf-8')
         else:
             return codec.encode_binary(value)
+
+    def encode_array(self, value, elem_oid, protocol_format):
+        if protocol_format == PgProtocolFormat.BINARY:
+            return self.encode_array_binary(
+                value, elem_oid, protocol_format)
+        else:
+            return self.encode_array_text(
+                value, elem_oid, protocol_format).encode('utf-8')
+
+    def encode_array_text(self, value, elem_oid, protocol_format):
+        if value:
+            self.check_array_dims(value)
+
+        ret = '{'
+        for elem in value:
+            if ret != '{':
+                ret += ','
+            if isinstance(elem, list):
+                ret += self.encode_array_text(
+                    elem, elem_oid, protocol_format)
+            else:
+                ret += self.encode_value(
+                    elem, elem_oid, protocol_format).decode('utf-8')
+        ret += '}'
+        return ret
+
+    def encode_array_binary(self, value, elem_oid, protocol_format):
+        if not isinstance(value, list):
+            raise TypeError(
+                f'Expected a list for a postgres array; Got: {value!r}')
+
+        if value == []:
+            dims = []
+        else:
+            # all sub-arrays should have the same length; a sub-array
+            # is one which does not have another list as its child.
+            dims = self.check_array_dims(value)
+
+        encoded = b''
+
+        ndims = len(dims)
+
+        enc_ndims = encode_int(ndims)
+        enc_flags = encode_int(0)
+        enc_elem_oid = encode_int(elem_oid)
+        encoded += enc_ndims + enc_flags + enc_elem_oid
+
+        for dim in dims:
+            encoded += encode_int(dim)  # upper bound
+            encoded += encode_int(0)    # lower bound: unused
+
+        def flatten(lst):
+            ret = []
+            for i in lst:
+                if isinstance(i, list):
+                    ret += flatten(i)
+                else:
+                    ret.append(i)
+            return ret
+
+        for elem in flatten(value):
+            encoded_value = self.encode_value(
+                elem, elem_oid, protocol_format)
+            encoded += encode_int(len(encoded_value))
+            encoded += encoded_value
+
+        return encoded
+
+    def check_array_dims(self, array, dims=None):
+        if array == []:
+            raise ValueError('Sub-arrays cannot be empty')
+
+        if dims is None:
+            dims = []
+
+        dims += [len(array)]
+
+        if all(isinstance(e, list) for e in array):
+            dims1 = self.check_array_dims(array[0], list(dims))
+            for subarr in array[1:]:
+                dims2 = self.check_array_dims(subarr, list(dims))
+                if dims2 != dims1:
+                    raise ValueError(
+                        'Multidimensional arrays must have sub-arrays '
+                        'with matching dimensions')
+
+            return dims1
+        elif not any(isinstance(e, list) for e in array):
+            return dims
+        else:
+            raise ValueError(
+                'Each array level should either be all other arrays, '
+                'or all non-arrays.')
 
     def decode_row(self, columns, row_desc):
         row = []
@@ -95,27 +202,133 @@ class CodecHelper:
             type_modifier, format_code
         ) = col_desc
 
+        if type_oid in self._array_oid_to_oid:
+            elem_oid = self._array_oid_to_oid[type_oid]
+            return self.decode_array(col, elem_oid, format_code)
+
+        if format_code == PgProtocolFormat.TEXT:
+            col = col.decode('utf-8')
+
+        return self.decode_value(col, type_oid, format_code)
+
+    def decode_value(self, value, type_oid, format_code):
         type_name = self._oid_to_name.get(type_oid)
         if type_name is None:
             warnings.warn(
-                f'Unknown column OID: {type_oid}; returning un-decoded '
+                f'Unknown type OID: {type_oid}; returning un-decoded '
                 'data.')
-            return col
+            return value
 
         codec = self._type_name_to_codec.get(type_name)
         if codec is None:
             warnings.warn(
-                f'Unknown column type: {type_name}; returning '
+                f'Unknown postgres type: {type_name}; returning '
                 'un-decoded data.')
-            return col
+            return value
 
         if format_code == 0:
-            return codec.decode_text(col)
+            return codec.decode_text(value)
         elif format_code == 1:
-            return codec.decode_binary(col)
+            return codec.decode_binary(value)
         else:
             raise InterfaceError(
                 f'Unexpected column format code: {format_code}')
+
+
+    def decode_array(self, value, elem_oid, format_code):
+        if format_code == PgProtocolFormat.BINARY:
+            return self.decode_array_binary(
+                value, elem_oid, format_code)
+        else:
+            return self.decode_array_text(
+                value, elem_oid, format_code)
+
+    def decode_array_binary(self, value, elem_oid, format_code):
+        buf = memoryview(value)
+
+        ndims = read_int(buf, 0)
+        flags = read_int(buf, 4)
+        _elem_oid = read_int(buf, 8)
+        assert _elem_oid == elem_oid
+        idx = 12
+
+        if ndims == 0:
+            return []
+
+        if ndims > ARRAY_MAX_DIM:
+            raise InterfaceError(
+                f'Array dimensions greater than expected max. Expected '
+                f'up to {ARRAY_MAX_DIM}; Got: {ndims}')
+        elif ndims < 0:
+            raise InterfaceError('Array dimensions value is negative')
+
+        dims = []
+        for i in range(ndims):
+            dim = read_int(buf, idx)
+            dims.append(dim)
+
+            # lower bound is not used, so we skip an extra 4
+            idx += 8
+
+        array_length = 1
+        for d in dims:
+            array_length *= d
+
+        # just in case
+        if array_length == 0:
+            return []
+
+        elems = []
+        for i in range(array_length):
+            elem_length = read_int(buf, idx)
+            idx += 4
+
+            if elem_length < 0:
+                elem = None # NULL
+            else:
+                elem = self.decode_value(
+                    bytes(buf[idx:idx+elem_length]),
+                    elem_oid,
+                    format_code)
+
+            idx += elem_length
+
+            elems.append(elem)
+
+        # now restructure the elements into a properly dimensioned
+        # array. we don't use the last dimension because otherwise
+        # we'd get one extra dimension in output (input is already an
+        # array of one dimension)
+        array = elems
+        for dim in reversed(dims[1:]):
+            array = chunks(array, dim)
+
+        return array
+
+    def decode_array_text(self, value, elem_oid, format_code):
+        value = value.decode('utf-8')
+        try:
+            array = parse_text_array(value)
+        except ArrayParseError:
+            raise InterfaceError(
+                f"Received invalid array literal: '{value}'")
+        array = self.decode_parsed_text_array(
+            array, elem_oid, format_code)
+        return array
+
+    def decode_parsed_text_array(self, array, elem_oid, format_code):
+        ret = []
+        for e in array:
+            if isinstance(e, str):
+                ret.append(self.decode_value(e, elem_oid, format_code))
+            elif isinstance(e, list):
+                ret.append(
+                    self.decode_parsed_text_array(
+                        e, elem_oid, format_code))
+            else:
+                raise InternalError(
+                    f'Expected string in parsed array; got: {e!r}')
+        return ret
 
 
 class CodecMetaclass(type):
@@ -190,7 +403,9 @@ class CodecMetaclass(type):
                         f'postgres type "{pg_type_name}"; Got: '
                         f'{value!r}')
                 else:
-                    types_str = f'[{", ".join(t.__name__ for t in types)}]'
+                    types_str = (
+                        f'[{", ".join(t.__name__ for t in types)}]'
+                    )
                     raise TypeError(
                         f'Codec {codec_class.__name__} expects a value '
                         f'of a python type in {types_str} for postgres '
@@ -918,3 +1133,93 @@ def encode_inet_or_cidr(value):
         return header + value.network_address.packed
     else:
         return header + value.packed
+
+
+def read_int(data, idx=0):
+    return int.from_bytes(data[idx:idx+4],
+                          byteorder='big',
+                          signed=True)
+
+
+def encode_int(n: int):
+    return n.to_bytes(length=4, byteorder='big', signed=True)
+
+
+def read_text_array(buf, idx=0):
+    # buffer must be decoded into a string, otherwise unicode will not
+    # be handled correctly
+    assert isinstance(buf, str)
+
+    if len(buf) - idx < 2:
+        raise ValueError(
+            f"Array literal should be at least 2 characters; '{buf}'")
+
+    def next_char():
+        nonlocal idx
+        if idx < len(buf):
+            c = buf[idx]
+            idx += 1
+            return c
+        raise ValueError(f"Unexpected end of array literal: {buf}")
+
+    start_idx = idx
+    if next_char() != '{':
+        raise InterfaceError(
+            'Invalid array literal received; expected "{" at index '
+            f"{idx-1}: '{buf}'")
+
+    array = []
+    cur_item = ''
+    quoted = False
+    c = prev = None
+    while idx < len(buf):
+        c, prev = next_char(), c
+        if c == '\\':
+            continue
+
+        if prev == '\\':
+            cur_item += c
+            continue
+
+        if c == '{':
+            item, nread = read_text_array(buf, idx - 1)
+            array.append(item)
+            idx += nread
+            continue
+
+        if c == '"' and quoted:
+            array.append(cur_item)
+            cur_item = ''
+            quoted = False
+            continue
+        elif c == '"':
+            quoted = True
+            continue
+
+        if c == ',':
+            if cur_item:
+                array.append(cur_item)
+                cur_item = ''
+            elif buf[idx-2] in [',', '{']:
+                raise InterfaceError(
+                    f"Invalid array literal: empty element before ',' "
+                    f"at index {idx-1}: {buf}")
+            continue
+
+        if c == '}':
+            if cur_item:
+                array.append(cur_item)
+            elif buf[idx-2] in [',', '{']:
+                raise InterfaceError(
+                    f"Invalid array literal: empty element before '}}' "
+                    f"at index {idx-1}: {buf}")
+            break
+
+        cur_item += c
+
+    if quoted:
+        raise InterfaceError(
+            'Unexpected end of string literal inside array literal: '
+            f"'{buf}'")
+
+    return array, idx - start_idx
