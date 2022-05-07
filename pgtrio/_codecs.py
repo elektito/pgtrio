@@ -118,8 +118,15 @@ class CodecHelper:
                 ret += self.encode_array_text(
                     elem, elem_oid, protocol_format)
             else:
-                ret += self.encode_value(
+                encoded_elem = self.encode_value(
                     elem, elem_oid, protocol_format).decode('utf-8')
+                if '\\' in encoded_elem:
+                    encoded_elem = encoded_elem.replace('\\', '\\\\')
+                if '"' in encoded_elem:
+                    encoded_elem = encoded_elem.replace('"', '\\"')
+                if any(c in '{},"' for c in encoded_elem):
+                    encoded_elem = f'"{encoded_elem}"'
+                ret += encoded_elem
         ret += '}'
         return ret
 

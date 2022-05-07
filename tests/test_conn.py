@@ -611,3 +611,13 @@ async def test_array_param(conn):
         'select * from foobar where foo = any($1)',
         [1, 3])
     assert results == [(1,), (3,)]
+
+
+async def test_array_special_chars_encode(conn):
+    await conn.execute('create table foobar (foo text[])')
+    await conn.execute('insert into foobar (foo) values ($1)',
+                       ['xx"yy', 'xx,yy', 'x{}y', 'a\\"\\'])
+    results = await conn.execute('select * from foobar')
+    assert results == [
+        (['xx"yy', 'xx,yy', 'x{}y', 'a\\"\\'],)
+    ]
