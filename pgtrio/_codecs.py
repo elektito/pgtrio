@@ -103,6 +103,10 @@ class CodecHelper:
                 value, elem_oid, protocol_format).encode('utf-8')
 
     def encode_array_text(self, value, elem_oid, protocol_format):
+        if not isinstance(value, list):
+            raise TypeError(
+                f'Expected a list for a postgres array; Got: {value!r}')
+
         if value:
             self.check_array_dims(value)
 
