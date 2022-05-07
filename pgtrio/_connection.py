@@ -48,7 +48,8 @@ class Connection:
                  ssl=True,
                  ssl_required=True,
                  protocol_format=PgProtocolFormat._DEFAULT,
-                 codec_helper=None):
+                 codec_helper=None,
+                 tuple_class=None):
         self.database = database
         self.unix_socket_path = unix_socket_path
         self.host = host
@@ -57,6 +58,7 @@ class Connection:
         self.password = password
         self.ssl = ssl
         self.protocol_format = PgProtocolFormat.convert(protocol_format)
+        self.tuple_class = tuple_class
 
         # this will be set when the _run method returns (the
         # set_event_when_done decorator takes care of that)
@@ -128,7 +130,7 @@ class Connection:
     def register_codec(self, codec):
         self._codec_helper.register_codec(codec)
 
-    async def execute(self, query, *params):
+    async def execute(self, query, *params, tuple_class=None):
         if self._start_closing.is_set():
             raise ProgrammingError('Connection is closed.')
 
@@ -142,7 +144,10 @@ class Connection:
             raise InterfaceError(
                 'Calling task is not owner of the connection')
 
-        stmt = await self.prepare(query)
+        print(200, self, tuple_class, self.tuple_class, query)
+        tuple_class = tuple_class or self.tuple_class
+        print(300, tuple_class)
+        stmt = await self.prepare(query, tuple_class=tuple_class)
         results = await stmt.execute(*params)
 
         await self._close_pending_statements()
@@ -167,8 +172,8 @@ class Connection:
         stmt = await self.prepare(query)
         return await stmt.cursor(*params, **kwargs)
 
-    async def prepare(self, query):
-        stmt = PreparedStatement(self, query)
+    async def prepare(self, query, **kwargs):
+        stmt = PreparedStatement(self, query, **kwargs)
         await stmt._init()
         return stmt
 

@@ -13,9 +13,10 @@ ParameterDesc = namedtuple('ParameterDesc', ['name', 'type'])
 
 
 class PreparedStatement:
-    def __init__(self, conn, query):
+    def __init__(self, conn, query, *, tuple_class=None):
         self.conn = conn
         self.query = query
+        self.tuple_class = tuple_class
 
         # even though the null character is valid UTF-8, we can't use
         # it in queries, because at the protocol level, the queries
@@ -211,7 +212,7 @@ class PreparedStatement:
                 )
             elif isinstance(msg, _pgmsg.DataRow):
                 row = self.conn._codec_helper.decode_row(
-                    msg.columns, self._row_desc)
+                    msg.columns, self._row_desc, self.tuple_class)
                 results.append(row)
             elif isinstance(msg, _pgmsg.RowDescription):
                 self._row_desc = msg.fields

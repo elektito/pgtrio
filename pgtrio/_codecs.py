@@ -198,11 +198,23 @@ class CodecHelper:
                 'Each array level should either be all other arrays, '
                 'or all non-arrays.')
 
-    def decode_row(self, columns, row_desc):
-        row = []
-        for col, col_desc in zip(columns, row_desc):
-            row.append(self.decode_col(col, col_desc))
-        return tuple(row)
+    def decode_row(self, columns, row_desc, tuple_class=None):
+        def make_tuple(*items):
+            # we need this function, because we cannot pass the tuple
+            # built-in a single argument and expect it to create a
+            # tuple of size one. When passed a single argument, it
+            # assumes it's an iterable and tries to convert it to a
+            # tuple.
+            return tuple(items)
+
+        tuple_class = tuple_class or make_tuple
+        print('x', tuple_class)
+        return tuple_class(
+            *(
+                self.decode_col(col, col_desc)
+                for col, col_desc in zip(columns, row_desc)
+            )
+        )
 
     def decode_col(self, col, col_desc):
         if col is None:

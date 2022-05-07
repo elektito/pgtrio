@@ -5,6 +5,7 @@ from ipaddress import (
     ip_network,
 )
 from datetime import datetime, date, time, timedelta, timezone
+from collections import namedtuple
 from pytest import raises
 
 
@@ -621,3 +622,28 @@ async def test_array_special_chars_encode(conn):
     assert results == [
         (['xx"yy', 'xx,yy', 'x{}y', 'a\\"\\'],)
     ]
+
+
+async def test_tuple_class_when_execute(conn):
+    await conn.execute('create table foobar (foo int, bar text)')
+    await conn.execute(
+        "insert into foobar (foo, bar) values (100, 'abc')")
+
+    FoobarTuple = namedtuple('FoobarTuple', ['foo', 'bar'])
+    results = await conn.execute('select * from foobar',
+                                 tuple_class=FoobarTuple)
+    assert results == [(100, 'abc')]
+    assert isinstance(results[0], FoobarTuple)
+
+
+async def test_tuple_class_per_connection(conn):
+    FoobarTuple = namedtuple('FoobarTuple', ['foo', 'bar'])
+    conn.tuple_class = FoobarTuple
+    print(100, conn, conn.tuple_class)
+    await conn.execute('create table foobar (foo int, bar text)')
+    await conn.execute(
+        "insert into foobar (foo, bar) values (100, 'abc')")
+
+    results = await conn.execute('select * from foobar')
+    assert results == [(100, 'abc')]
+    assert isinstance(results[0], FoobarTuple)
