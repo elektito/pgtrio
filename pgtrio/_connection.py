@@ -195,7 +195,7 @@ class Connection:
                 dont_decode_values=dont_decode_values,
                 protocol_format=protocol_format)
         finally:
-            await self._wait_for_ready()
+            await self._wait_for_ready(ignore_unknown=True)
 
         if not no_close_pending:
             await self._close_pending_statements()
@@ -285,10 +285,11 @@ class Connection:
     def _close_stmt(self, stmt_name):
         self._statements_to_close.append(stmt_name)
 
-    async def _wait_for_ready(self):
+    async def _wait_for_ready(self, ignore_unknown=False):
         if not self._is_ready:
             try:
-                msg = await self._get_msg(_pgmsg.ReadyForQuery)
+                msg = await self._get_msg(_pgmsg.ReadyForQuery,
+                                          ignore_unknown=ignore_unknown)
                 await self._handle_msg_ready_for_query(msg)
                 self._is_ready = True
             except:
@@ -338,7 +339,7 @@ class Connection:
 
         return results
 
-    async def _get_msg(self, *msg_types):
+    async def _get_msg(self, *msg_types, ignore_unknown=False):
         if self._incoming_recv_chan is None:
             raise InternalError(
                 '_get_msg called before ReadyForRequest was received')
@@ -346,7 +347,7 @@ class Connection:
         async for msg in self._incoming_recv_chan:
             if type(msg) in msg_types:
                 return msg
-            else:
+            elif not ignore_unknown:
                 await self._handle_unsolicited_msg(msg)
 
     async def _send_msg(self, *msgs):

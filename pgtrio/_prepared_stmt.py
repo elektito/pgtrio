@@ -49,7 +49,7 @@ class PreparedStatement:
         try:
             await self._parse_query()
         finally:
-            await self.conn._wait_for_ready()
+            await self.conn._wait_for_ready(ignore_unknown=True)
 
         self._initialized = True
 
@@ -152,7 +152,7 @@ class PreparedStatement:
         try:
             results = await self._execute(*params, limit=limit)
         finally:
-            await self.conn._wait_for_ready()
+            await self.conn._wait_for_ready(ignore_unknown=True)
 
         return results
 
@@ -260,7 +260,7 @@ class PreparedStatement:
         try:
             results = await self._exec_continue(limit=limit)
         finally:
-            await self.conn._wait_for_ready()
+            await self.conn._wait_for_ready(ignore_unknown=True)
 
         return results
 
