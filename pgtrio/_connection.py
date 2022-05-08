@@ -131,7 +131,7 @@ class Connection:
         self._codec_helper.register_codec(codec)
 
     async def execute(self, query, *params, tuple_class=None):
-        if self._start_closing.is_set():
+        if self._start_closing.is_set() or self.closed.is_set():
             raise ProgrammingError('Connection is closed.')
 
         if not self._pg_types_loaded.is_set():

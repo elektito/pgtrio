@@ -2,6 +2,7 @@ import trio
 from functools import wraps
 from contextlib import asynccontextmanager
 from ._connection import Connection
+from ._utils import set_event_when_done
 
 
 class Pool:
@@ -22,6 +23,9 @@ class Pool:
         self.max_size = pool_max_size
         self.close_timeout = pool_close_timeout
 
+        # this will be set by 'set_event_when_done' when _run returns
+        self.closed = trio.Event()
+
         self._conn_kwargs = connection_kwargs
         self._conn_init = pool_conn_init
 
@@ -31,7 +35,7 @@ class Pool:
         self._nursery = None
         self._conn_limit = trio.CapacityLimiter(self.max_size)
         self._started = trio.Event()
-        self._closed = trio.Event()
+        self._start_closing = trio.Event()
 
     @asynccontextmanager
     async def acquire(self):
@@ -49,8 +53,9 @@ class Pool:
                 self._free_conns.append(conn)
 
     def close(self):
-        self._closed.set()
+        self._start_closing.set()
 
+    @set_event_when_done('closed')
     async def _run(self):
         async with trio.open_nursery() as nursery:
             self._nursery = nursery
@@ -59,7 +64,7 @@ class Pool:
                 await self._add_connection()
 
             self._started.set()
-            await self._closed.wait()
+            await self._start_closing.wait()
 
             all_conns = self._free_conns + self._in_use_conns
             for conn in all_conns:
