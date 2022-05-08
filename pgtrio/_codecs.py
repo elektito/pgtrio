@@ -119,14 +119,20 @@ class CodecHelper:
                     elem, elem_oid, protocol_format)
             else:
                 encoded_elem = self.encode_value(
-                    elem, elem_oid, protocol_format).decode('utf-8')
-                if '\\' in encoded_elem:
-                    encoded_elem = encoded_elem.replace('\\', '\\\\')
-                if '"' in encoded_elem:
-                    encoded_elem = encoded_elem.replace('"', '\\"')
-                if any(c in '{},"' for c in encoded_elem):
-                    encoded_elem = f'"{encoded_elem}"'
-                ret += encoded_elem
+                    elem, elem_oid, protocol_format)
+                if encoded_elem is None:
+                    ret += 'NULL'
+                else:
+                    encoded_elem = encoded_elem.decode('utf-8')
+                    if '\\' in encoded_elem:
+                        encoded_elem = encoded_elem.replace('\\', '\\\\')
+                    if '"' in encoded_elem:
+                        encoded_elem = encoded_elem.replace('"', '\\"')
+                    if any(c in '{},"' for c in encoded_elem):
+                        encoded_elem = f'"{encoded_elem}"'
+                    if encoded_elem.lower() == 'null':
+                        encoded_elem = '"NULL"'
+                    ret += encoded_elem
         ret += '}'
         return ret
 
@@ -167,8 +173,11 @@ class CodecHelper:
         for elem in flatten(value):
             encoded_value = self.encode_value(
                 elem, elem_oid, protocol_format)
-            encoded += encode_int(len(encoded_value))
-            encoded += encoded_value
+            if encoded_value is None:
+                encoded += encode_int(-1)
+            else:
+                encoded += encode_int(len(encoded_value))
+                encoded += encoded_value
 
         return encoded
 
@@ -248,9 +257,9 @@ class CodecHelper:
                 'un-decoded data.')
             return value
 
-        if format_code == 0:
+        if format_code == PgProtocolFormat.TEXT:
             return codec.decode_text(value)
-        elif format_code == 1:
+        elif format_code == PgProtocolFormat.BINARY:
             return codec.decode_binary(value)
         else:
             raise InterfaceError(
@@ -312,8 +321,7 @@ class CodecHelper:
                     bytes(buf[idx:idx+elem_length]),
                     elem_oid,
                     format_code)
-
-            idx += elem_length
+                idx += elem_length
 
             elems.append(elem)
 
@@ -347,6 +355,8 @@ class CodecHelper:
                 ret.append(
                     self.decode_parsed_text_array(
                         e, elem_oid, format_code))
+            elif e is None:
+                ret.append(None)
             else:
                 raise InternalError(
                     f'Expected string in parsed array; got: {e!r}')

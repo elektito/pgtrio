@@ -624,6 +624,26 @@ async def test_array_special_chars_encode(conn):
     ]
 
 
+async def test_array_with_null(conn):
+    await conn.execute('create table foobar (foo int[])')
+    await conn.execute('insert into foobar (foo) values ($1)',
+                       [1, 2, None, 3, 4])
+    results = await conn.execute('select * from foobar')
+    assert results == [
+        ([1, 2, None, 3, 4],)
+    ]
+
+
+async def test_array_with_null_string(conn):
+    await conn.execute('create table foobar (foo text[])')
+    await conn.execute('insert into foobar (foo) values ($1)',
+                       ['foo', None, 'NULL', 'bar'])
+    results = await conn.execute('select * from foobar')
+    assert results == [
+        (['foo', None, 'NULL', 'bar'],)
+    ]
+
+
 async def test_tuple_class_when_execute(conn):
     await conn.execute('create table foobar (foo int, bar text)')
     await conn.execute(

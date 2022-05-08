@@ -43,6 +43,8 @@ class ArrayVisitor(NodeVisitor):
         return ret
 
     def visit_unquoted(self, node, visited_children):
+        if node.text.lower() == 'null':
+            return None
         return node.text
 
     def generic_visit(self, node, visited_children):
