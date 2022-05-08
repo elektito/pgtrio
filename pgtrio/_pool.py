@@ -40,9 +40,16 @@ class Pool:
     @asynccontextmanager
     async def acquire(self):
         async with self._conn_limit:
-            if not self._free_conns:
-                await self._add_connection()
-            conn = self._free_conns.pop()
+            while True:
+                if not self._free_conns:
+                    await self._add_connection()
+                conn = self._free_conns.pop()
+                if not conn.closed.is_set() and \
+                   not conn._start_closing.is_set():
+                    break
+                # the connection will be discarded (since we just
+                # popped it), and later another one will be created to
+                # replace it
             self._in_use_conns.append(conn)
 
             conn._owner = trio.lowlevel.current_task()
