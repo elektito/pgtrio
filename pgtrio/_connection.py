@@ -417,6 +417,11 @@ class Connection:
             )
             await self._send_msg(msg)
             return
+        elif isinstance(msg, _pgmsg.Authentication):
+            auth_method = type(msg).__name__[len('Authentication'):]
+            raise InterfaceError(
+                f'Unsupported authentication method requested by '
+                f'server: {auth_method}')
 
     async def _handle_error(self, msg):
         raise get_exc_from_msg(msg)
