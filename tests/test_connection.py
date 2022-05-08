@@ -639,7 +639,6 @@ async def test_tuple_class_when_execute(conn):
 async def test_tuple_class_per_connection(conn):
     FoobarTuple = namedtuple('FoobarTuple', ['foo', 'bar'])
     conn.tuple_class = FoobarTuple
-    print(100, conn, conn.tuple_class)
     await conn.execute('create table foobar (foo int, bar text)')
     await conn.execute(
         "insert into foobar (foo, bar) values (100, 'abc')")

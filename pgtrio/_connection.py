@@ -144,9 +144,7 @@ class Connection:
             raise InterfaceError(
                 'Calling task is not owner of the connection')
 
-        print(200, self, tuple_class, self.tuple_class, query)
         tuple_class = tuple_class or self.tuple_class
-        print(300, tuple_class)
         stmt = await self.prepare(query, tuple_class=tuple_class)
         results = await stmt.execute(*params)
 

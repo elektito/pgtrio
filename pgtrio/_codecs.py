@@ -208,7 +208,6 @@ class CodecHelper:
             return tuple(items)
 
         tuple_class = tuple_class or make_tuple
-        print('x', tuple_class)
         return tuple_class(
             *(
                 self.decode_col(col, col_desc)
