@@ -1,8 +1,12 @@
+import logging
 import trio
 from functools import wraps
 from contextlib import asynccontextmanager
 from ._connection import Connection
 from ._utils import set_event_when_done
+
+
+logger = logging.getLogger(__name__)
 
 
 class Pool:
@@ -105,7 +109,16 @@ class Pool:
         if self._conn_init:
             self._conn_init(conn)
 
+        conn._broken_handler = self._handle_broken_conn
+
         return conn
+
+    def _handle_broken_conn(self, conn):
+        logger.info('Discarding closed connection in Pool')
+        if conn in self._free_conns:
+            self._free_conns.remove(conn)
+        if conn in self._in_use_conns:
+            self._in_use_conns.remove(conn)
 
 
 @asynccontextmanager

@@ -78,6 +78,7 @@ class Connection:
         self._query_row_count = None
         self._query_results = []
         self._statements_to_close = []
+        self._broken_handler = None
 
         self._owner = trio.lowlevel.current_task()
         if self._owner is None:
@@ -252,7 +253,7 @@ class Connection:
                     break
                 await self._stream.send_all(bytes(msg))
         except trio.BrokenResourceError:
-            raise OperationalError('Database connection broken')
+            self._raise_broken_conn()
         finally:
             self._run_send_finished.set()
 
@@ -262,12 +263,12 @@ class Connection:
             try:
                 data = await self._stream.receive_some(BUFFER_SIZE)
             except trio.BrokenResourceError:
-                raise OperationalError('Database connection broken')
+                self._raise_broken_conn()
             except trio.ClosedResourceError:
                 break
 
             if data == b'':
-                raise OperationalError('Database connection broken')
+                self._raise_broken_conn()
             buf += data
 
             start = 0
@@ -508,13 +509,13 @@ class Connection:
                     self._stream = await trio.open_tcp_stream(
                         self.host, self.port)
         except (trio.socket.gaierror, OSError) as e:
-            raise OperationalError(str(e))
+            self._raise_broken_conn(str(e))
 
     async def _setup_ssl(self):
         await self._stream.send_all(bytes(_pgmsg.SSLRequest()))
         resp = await self._stream.receive_some(1)
         if resp == b'':
-            raise OperationalError('Database connection broken')
+            self._raise_broken_conn()
         if resp == b'N':
             if self.ssl_required:
                 raise OperationalError(
@@ -557,6 +558,16 @@ class Connection:
         self._id_counters[id_type] += 1
         idx = self._id_counters[id_type]
         return f'_pgtrio_{id_type}_{idx}'
+
+    def _raise_broken_conn(self, msg=None):
+        if not msg:
+            msg = 'Database connection broken'
+
+        if self._broken_handler:
+            self._broken_handler(self)
+            self.close()
+        else:
+            raise OperationalError(msg)
 
 
 @asynccontextmanager
