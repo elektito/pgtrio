@@ -1,3 +1,4 @@
+import logging
 from collections import namedtuple
 from . import _pgmsg
 from ._utils import get_exc_from_msg, get_rowcount
@@ -7,9 +8,8 @@ from ._cursor import Cursor
 
 
 NO_EXECUTE = object()
-
-
 ParameterDesc = namedtuple('ParameterDesc', ['name', 'type'])
+logger = logging.getLogger(__name__)
 
 
 class PreparedStatement:
@@ -152,6 +152,19 @@ class PreparedStatement:
         self._initial_transaction = self.conn.current_transaction
         try:
             results = await self._execute(*params, limit=limit)
+        except Exception as e:
+            logger.error(
+                f'Error while executing query: {self.query}\n'
+                f'   Error: {e}')
+            raise
+        except BaseException as e:
+            # we don't want BaseExceptions to be in normal logs, since
+            # it could be an exception like Cancelled which is not
+            # really an error
+            logger.debug(
+                f'Error while executing query: {self.query}\n'
+                f'   Error: {e}')
+            raise
         finally:
             await self.conn._wait_for_ready(ignore_unknown=True)
 

@@ -296,8 +296,15 @@ class Connection:
                                           ignore_unknown=ignore_unknown)
                 await self._handle_msg_ready_for_query(msg)
                 self._is_ready = True
-            except:
-                # can't salvage connection at this point
+            except BaseException as e:
+                if isinstance(e, Exception):
+                    logger.error(
+                        f'Cannot salvage connection. Will close. Error: '
+                        f'{e}')
+                else: # BaseException. could be Cancelled.
+                    logger.debug(
+                        f'Cannot salvage connection. Will close. Error: '
+                        f'{e}')
                 self.close()
                 raise
 
