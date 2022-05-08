@@ -71,11 +71,33 @@ def test_inet():
         [ip_address('192.168.1.1'), ip_address('::3')])
 
 
+def test_inet_with_string():
+    for value in ['192.168.1.1', '::3']:
+        encoded = _codecs.Inet.encode_text(value)
+        decoded = _codecs.Inet.decode_text(encoded)
+        assert decoded == ip_address(value)
+
+        encoded = _codecs.Inet.encode_binary(value)
+        decoded = _codecs.Inet.decode_binary(encoded)
+        assert decoded == ip_address(value)
+
+
 def test_cidr():
     _test_codec(_codecs.Cidr, [
         ip_network('192.168.0.0/16'),
         ip_network('::/8')
     ])
+
+
+def test_cidr_with_string():
+    for value in ['192.168.0.0/16', '::/8']:
+        encoded = _codecs.Cidr.encode_text(value)
+        decoded = _codecs.Cidr.decode_text(encoded)
+        assert decoded == ip_network(value)
+
+        encoded = _codecs.Cidr.encode_binary(value)
+        decoded = _codecs.Cidr.decode_binary(encoded)
+        assert decoded == ip_network(value)
 
 
 def test_char():

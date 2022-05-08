@@ -692,7 +692,7 @@ class Float8(Codec):
 @register_builtin_codec
 class Inet(Codec):
     pg_type = 'inet'
-    python_types = [IPv4Address, IPv6Address]
+    python_types = [IPv4Address, IPv6Address, str]
 
     @classmethod
     def decode_text(cls, value):
@@ -704,17 +704,21 @@ class Inet(Codec):
 
     @classmethod
     def encode_text(cls, value):
+        if isinstance(value, str):
+            value = ip_address(value)
         return str(value)
 
     @classmethod
     def encode_binary(cls, value):
+        if isinstance(value, str):
+            value = ip_address(value)
         return encode_inet_or_cidr(value)
 
 
 @register_builtin_codec
 class Cidr(Codec):
     pg_type = 'cidr'
-    python_types = [IPv4Network, IPv6Network]
+    python_types = [IPv4Network, IPv6Network, str]
 
     @classmethod
     def decode_text(cls, value):
@@ -726,10 +730,14 @@ class Cidr(Codec):
 
     @classmethod
     def encode_text(cls, value):
+        if isinstance(value, str):
+            value = ip_network(value)
         return str(value)
 
     @classmethod
     def encode_binary(cls, value):
+        if isinstance(value, str):
+            value = ip_network(value)
         return encode_inet_or_cidr(value)
 
 
